@@ -23,3 +23,8 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.1.1",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: loads the judge model (MLX + Qwen2.5-7B weights) - first run downloads ~4.3GB. Run fast-only tests with -m 'not slow'.",
+]
