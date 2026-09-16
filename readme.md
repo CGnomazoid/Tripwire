@@ -58,3 +58,47 @@ Python, PyTorch, Hugging Face `transformers`, `bitsandbytes` or GGUF/llama.cpp f
 
 ## Note to future Claude
 This is a fresh idea sketched out in conversation, not a spec handed down from on high. If you find a better way to structure the model interface, the calibration approach, or the build order, do that instead — the outline above is a starting point, not a constraint. Flag tradeoffs to Colin as you hit them rather than silently picking a path he might disagree with.
+
+---
+
+## Status (2026-09-16, first build session)
+
+Steps 1-5 of the build order are done and working end to end. Numbers below are real measured output, not estimates.
+
+**Backend choice: MLX, not HF transformers/vLLM/llama.cpp.** This is Apple Silicon (M4 Max, 36GB unified memory), no CUDA, no `torch` wheel currently installed for the system's Python. `mlx` + `mlx-lm` were already present, give direct Metal-accelerated access to raw logits after a single forward pass (no server round trip, no generation), and needed zero glue code to get candidate-token logprobs out. This is a better fit for "single forward pass, read logprobs" than going through Ollama's HTTP API. Ollama stays installed for other things but isn't in this project's path.
+
+**Model: `mlx-community/Qwen2.5-7B-Instruct-4bit`** (auto-downloaded from HF on first run, ~4.3GB). Single-token option labels (`A`/`B`/`C`, `T`/`F`) verified against this tokenizer - the readme's flagged risk about multi-token options didn't end up mattering because single letters tokenize cleanly.
+
+**Measured latency:** ~140ms steady-state forward pass on M4 Max; ~265-290ms end-to-end through the full `Judge.ask()` API (tokenize + forward + softmax). Comfortably under the 1s target and close to the 300ms stretch goal.
+
+**Measured accuracy (honest numbers, see `scripts/run_spike.py` and `scripts/run_eval.py`):**
+- Spike set (20 hand-picked, clearly-easy examples): 75% raw 3-way risk-label accuracy (low/medium/high), but **100%** on the operationally meaningful derived decision (does this need to block for human confirmation, i.e. is it high-risk or not). The model nails the two extremes and gets fuzzy specifically on "low vs medium" - which is the least consequential mistake to make.
+- Larger eval set (97 examples spanning file ops, db, network, finance, comms, infra, code exec, account mgmt, plus 15 probability-type questions; 60/40 calibration/test split, seeded): held-out block-vs-allow accuracy **87.2%**, 3-way label accuracy 71.8%, probability-question accuracy 93.3%.
+- Raw model is meaningfully overconfident: expected calibration error (ECE) starts at **0.236** (T=1.0) and drops to **0.112** after fitting a single scalar temperature (T≈3.33) via NLL minimization on the calibration split - temperature scaling roughly halves the calibration gap, as hoped, with no accuracy cost (T doesn't change the argmax, only the reported confidence).
+- Weakest categories: `fs_delete` and `borderline` (both 50%) - worth another look before trusting this on real destructive-filesystem calls specifically. `account`, `fs_write`, `probability` are strong (93-100%).
+
+**What's built:**
+- `src/supervisor/` - the package: `types.py` (pydantic Choice/Score/Probability question + JudgeAnswer types), `judge.py` (the `Judge` class - loads the model once, `judge.ask(state, question)` does one forward pass and returns a calibrated structured answer), `calibration.py` (temperature-scaling fit + ECE), `questions.py` (canonical reusable risk-scale and allow/block questions).
+- `scripts/gen_dataset.py` - generates `data/spike.jsonl` (20) and `data/eval.jsonl` (97) from hand-authored, hand-labeled tool-call scenarios (ground truth is a judgment call, not an oracle - see non-goals above).
+- `scripts/run_spike.py` - step 1, raw mechanism sanity check.
+- `scripts/run_eval.py` - steps 3+6, fits calibration and reports accuracy/ECE/reliability tables on a held-out split; writes `data/calibration.json`.
+- `demo/agent_demo.py` - step 5, a toy scripted agent loop that actually executes benign tool calls into `demo/sandbox/` and blocks the risky ones (an unverified $500k transfer, a recursive delete) before they run, using the fitted calibration.
+- `tests/` - fast pure-math unit tests for the calibration layer and pydantic validators (no model load needed).
+
+**Not done yet (steps 4, 7, and general hardening):**
+- No real speed/quantization pass beyond "already 4-bit via mlx-community." Haven't tried int8 vs 4-bit tradeoffs or a smaller model.
+- Haven't tried the 32B tier, or a LoRA fine-tune on distilled frontier-model judgments (step 7 stretch goal).
+- No reliability-diagram plot, just text tables (kept matplotlib off the dependency list on purpose - can add if wanted).
+- Eval set is hand-authored by Claude, not reviewed by a human yet - the `borderline` category especially deserves a sanity check from Colin on whether the assigned ground-truth labels are actually the risk level he'd want.
+- No pip-packaging/CLI polish yet (def-of-done item 1 - "pip-installable" - the package structure is there but nothing's been published or given a CLI entry point).
+
+**Known environment gotcha (macOS + uv + recent CPython, hit and fixed this session):** recent CPython point releases (confirmed on 3.13.12 and 3.14.3) patched `site.py` to silently skip any `.pth` file with the macOS "hidden" (`UF_HIDDEN`) flag set - this is a security fix, not a bug, but it collides with `uv`, which sets that flag on the editable-install `.pth` file it writes on every `uv sync`/`uv add`. Net effect: `import supervisor` can silently break (no error at all, `site.py` just drops the `src/` path) after any dependency change, on any Python 3.13.12+/3.14+. Fix: `scripts/setup.sh` runs `uv sync` and then clears the flag with `chflags nohidden`. If imports break again after adding a dependency, that's almost certainly this - rerun `scripts/setup.sh`.
+
+**How to run things:**
+```bash
+./scripts/setup.sh              # one-time / after any dependency change
+uv run python scripts/run_spike.py   # ~20s, proves the mechanism
+uv run python scripts/run_eval.py    # ~30s, calibration + honest accuracy/ECE report
+uv run python demo/agent_demo.py     # the live gating demo
+uv run pytest -q                     # fast unit tests, no model load
+```

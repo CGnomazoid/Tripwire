@@ -1,0 +1,9 @@
+{
+  "model_id": "mlx-community/Qwen2.5-7B-Instruct-4bit",
+  "temperature": 3.32603167593783,
+  "n_calibration_examples": 58,
+  "held_out_ece_raw": 0.23634342936086197,
+  "held_out_ece_calibrated": 0.11199040578762344,
+  "held_out_accuracy": 0.717948717948718,
+  "held_out_block_accuracy": 0.8717948717948718
+}
