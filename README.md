@@ -33,13 +33,22 @@ Because the label options (`A`/`B`/`C`, `T`/`F`) are single tokens, the whole th
 
 ## 📦 Install
 
-Needs [`uv`](https://docs.astral.sh/uv/) and one of two inference backends, auto-selected by platform:
+Needs [`uv`](https://docs.astral.sh/uv/) (a fast Python package/project manager — one binary, no separate Python install needed) and one of two inference backends, auto-selected by platform:
 
 | Platform | Backend | Extra |
 |---|---|---|
 | macOS, Apple Silicon | [MLX](https://github.com/ml-explore/mlx) (Metal) | `mlx` |
 | Windows / Linux + Nvidia GPU | PyTorch + [transformers](https://github.com/huggingface/transformers), 4-bit via bitsandbytes | `cuda` |
 | Anything else | PyTorch, CPU-only (works, just slow) | `torch` |
+
+**Install `uv`:**
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh   # macOS / Linux
+```
+```powershell
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"   # Windows
+```
+(See the [uv docs](https://docs.astral.sh/uv/getting-started/installation/) for other install methods, e.g. Homebrew or pipx.)
 
 **macOS:**
 ```bash
