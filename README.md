@@ -146,6 +146,14 @@ Real numbers from `scripts/run_eval.py`, not estimates:
 - **`should_block` accuracy, measured directly (not derived):** **69.2%**. Earlier versions of this README quoted ~87% here, but that number was computed from the separate risk-scale question's answer, not from actually calling the `ALLOW_BLOCK` question `should_block()` uses in production — that code path had never been directly evaluated. Once `scripts/run_eval.py` was fixed to test it for real, the honest number came in well below what the derived proxy implied. Weakest category: `fs_delete` at 58.3%.
 - **Calibration:** the raw model is meaningfully overconfident — expected calibration error (ECE) starts at **0.195** and drops to **0.063** after fitting a single scalar temperature via NLL minimization on a held-out split. Temperature scaling doesn't change *what* the model answers, only how honestly it reports its own confidence — it can soften an overconfident wrong answer, but it can't flip a genuinely near-50/50 one (see Known limitations).
 
+### Model comparison: 7B vs 14B
+
+The default model is `mlx-community/Qwen2.5-7B-Instruct-4bit`. A same-eval-set comparison against the 14B variant (same lineage/tuning, just more capacity — an intentionally narrower experiment than swapping to a differently-specialized model like a coding fine-tune, which was tried and came out clearly worse across every metric):
+
+![Bar chart comparing Qwen2.5-7B and 14B (Instruct, 4-bit) on three metrics: answer accuracy (73.1% vs 78.2%), should_block accuracy (69.2% vs 74.4%), and calibration ECE (0.063 vs 0.095, lower is better). 14B wins the first two; 7B wins ECE.](assets/model_comparison_7b_14b.svg)
+
+14B is a real, not marginal, improvement on the metric that matters most (`should_block` direct accuracy) — and it's concentrated exactly where 7B was weakest: `fs_delete` should_block accuracy goes from 58.3% to 83.3%, `fs_read` from 62.5% to 87.5%. It also resolves the specific real-world cases that motivated this comparison (`cd Desktop` now correctly lands `ALLOW` at 83% confidence instead of a ~55% coin flip). The honest tradeoff: 14B's raw confidence is more overconfident, and even the best-fit temperature (T≈8.2, near the calibration search range's edge) only gets its ECE to 0.095 — worse than 7B's 0.063. Latency roughly doubles (still comfortably under 1s for a single call: ~470-550ms vs ~250-290ms), and so does memory footprint. Not switched as the default yet; try it with `SUPERVISOR_MODEL_ID=mlx-community/Qwen2.5-14B-Instruct-4bit`.
+
 ## ⚠️ Known limitations
 
 This project's threat model is **catching honest mistakes**, not resisting a user or attacker deliberately trying to fool their own supervisor. That said, the adversarial test suite (`tests/test_adversarial.py`) documents two verified, real failure modes on record rather than hiding them:

@@ -1,0 +1,46 @@
+<svg viewBox="0 0 700 460" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="700" height="460" fill="#ffffff"/>
+
+  <text x="350" y="34" text-anchor="middle" font-size="19" font-weight="700" fill="#1a1a1a">Qwen2.5-7B vs 14B (Instruct, 4-bit) on the Tripwire eval set</text>
+  <text x="350" y="54" text-anchor="middle" font-size="12.5" fill="#666666">105 hand-labeled examples, 60/40 calibration/test split, same prompts and calibration procedure</text>
+
+  <!-- legend -->
+  <rect x="240" y="66" width="14" height="14" rx="2" fill="#4C78A8"/>
+  <text x="259" y="77" font-size="12.5" fill="#333333">7B (current default)</text>
+  <rect x="410" y="66" width="14" height="14" rx="2" fill="#F28E2B"/>
+  <text x="429" y="77" font-size="12.5" fill="#333333">14B</text>
+
+  <!-- baseline -->
+  <line x1="40" y1="350" x2="660" y2="350" stroke="#cccccc" stroke-width="1"/>
+
+  <!-- Panel 1: Answer accuracy -->
+  <text x="140" y="382" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a1a">Answer accuracy</text>
+  <text x="140" y="398" text-anchor="middle" font-size="11" fill="#888888">higher is better</text>
+  <rect x="75" y="138.7" width="55" height="211.3" rx="3" fill="#4C78A8"/>
+  <text x="102.5" y="128" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">73.1%</text>
+  <rect x="150" y="124.0" width="55" height="226.0" rx="3" fill="#F28E2B"/>
+  <text x="177.5" y="113" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">78.2%</text>
+
+  <!-- Panel 2: should_block direct accuracy -->
+  <text x="350" y="382" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a1a">should_block accuracy</text>
+  <text x="350" y="398" text-anchor="middle" font-size="11" fill="#888888">higher is better · direct, not derived</text>
+  <rect x="285" y="139.7" width="55" height="210.3" rx="3" fill="#4C78A8"/>
+  <text x="312.5" y="129" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">69.2%</text>
+  <rect x="360" y="123.9" width="55" height="226.1" rx="3" fill="#F28E2B"/>
+  <text x="387.5" y="113" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">74.4%</text>
+
+  <!-- Panel 3: ECE -->
+  <text x="560" y="382" text-anchor="middle" font-size="13" font-weight="600" fill="#1a1a1a">Calibration ECE</text>
+  <text x="560" y="398" text-anchor="middle" font-size="11" fill="#888888">lower is better</text>
+  <rect x="495" y="212.1" width="55" height="137.9" rx="3" fill="#4C78A8"/>
+  <text x="522.5" y="202" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">0.063</text>
+  <rect x="570" y="142.0" width="55" height="208.0" rx="3" fill="#F28E2B"/>
+  <text x="597.5" y="132" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">0.095</text>
+
+  <!-- divider lines between panels -->
+  <line x1="230" y1="90" x2="230" y2="350" stroke="#eeeeee" stroke-width="1"/>
+  <line x1="440" y1="90" x2="440" y2="350" stroke="#eeeeee" stroke-width="1"/>
+
+  <text x="350" y="424" text-anchor="middle" font-size="12" fill="#888888">14B is notably more accurate on should_block, especially fs_delete: 58.3% → 83.3%.</text>
+  <text x="350" y="442" text-anchor="middle" font-size="12" fill="#888888">But it's more raw-overconfident even after calibration, and ~2x 7B's latency/memory.</text>
+</svg>
