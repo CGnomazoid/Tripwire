@@ -2,8 +2,7 @@
 
 A fitted temperature is specific to one model - different models produce
 raw logits with different confidence distributions, so a temperature fit
-for one is wrong for another (see README's model-comparison section: 7B's
-best fit is T~3.8, 14B's is T~8.2). The store is keyed by model_id so
+for one is wrong for another. The store is keyed by model_id so
 switching models (SUPERVISOR_MODEL_ID, or Judge(model_id=...)) picks up the
 right calibration automatically instead of silently applying whatever
 model was last run through scripts/run_eval.py.
