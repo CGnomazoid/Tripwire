@@ -49,6 +49,10 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+# README documents `pytest -q` as the fast, no-model-load suite, so make
+# that true by default rather than by remembering to type it. An explicit
+# -m on the command line overrides this, so `pytest -m slow` still works.
+addopts = "-m 'not slow'"
 markers = [
     "slow: loads the judge model (Qwen2.5-7B weights, via whichever backend is active) - first run downloads several GB. Run fast-only tests with -m 'not slow'.",
 ]

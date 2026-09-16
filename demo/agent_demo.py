@@ -17,8 +17,9 @@ from rich.panel import Panel
 
 from supervisor import Judge, RISK_SCALE, calibration_store
 from supervisor.audit_log import log_call
+from supervisor.paths import REPO_ROOT as ROOT
+from supervisor.questions import RISK_NAMES
 
-ROOT = Path(__file__).resolve().parent.parent
 SANDBOX = Path(__file__).resolve().parent / "sandbox"
 
 console = Console()
@@ -109,7 +110,7 @@ def main() -> None:
         result = judge.ask(state, RISK_SCALE)
         gate_ms = (time.time() - t0) * 1000
 
-        risk_label = {"A": "LOW", "B": "MEDIUM", "C": "HIGH"}[result.answer]
+        risk_label = RISK_NAMES[result.answer].upper()
         color = {"A": "green", "B": "yellow", "C": "red"}[result.answer]
         console.print(
             f"  [bold {color}]risk: {risk_label}[/bold {color}] "

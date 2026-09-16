@@ -12,9 +12,8 @@ import os
 import time
 from functools import lru_cache
 
-import numpy as np
-
 from supervisor.backends import DEFAULT_MODEL_IDS, load_backend, resolve_backend_name
+from supervisor.calibration import softmax
 from supervisor.sanitize import strip_comments
 from supervisor.types import (
     ChoiceOption,
@@ -105,14 +104,6 @@ class Judge:
     def _candidate_logits(self, prompt_text: str, candidate_ids: list[int]) -> list[float]:
         return self._backend.candidate_logits(prompt_text, candidate_ids)
 
-    @staticmethod
-    def _softmax_over_candidates(candidate_logits: list[float], temperature: float) -> list[float]:
-        scaled = np.asarray(candidate_logits, dtype=np.float64) / max(temperature, 1e-6)
-        scaled = scaled - scaled.max()  # numerical stability, doesn't change the result
-        exp = np.exp(scaled)
-        probs = exp / exp.sum()
-        return [float(p) for p in probs]
-
     # -- public API -----------------------------------------------------------
 
     def ask(self, state: str, question: Question, temperature: float | None = None) -> JudgeAnswer:
@@ -124,98 +115,70 @@ class Judge:
         t = self.temperature if temperature is None else temperature
         t0 = time.time()
 
-        if isinstance(question, ChoiceQuestion):
-            options = question.options
+        # All three question types are the same mechanism: lay out labeled
+        # candidates, run one forward pass, read the logits at those labels.
+        # Only the wording of the question block and the shape of the answer
+        # differ, so only those are branched on.
+        if isinstance(question, (ChoiceQuestion, ScoreQuestion)):
+            is_score = isinstance(question, ScoreQuestion)
+            options = question.scale if is_score else question.options
             labels = [o.label for o in options]
-            ids = [self._label_token_id(l) for l in labels]
+            heading = "SCALE (low to high)" if is_score else "OPTIONS"
             block = (
-                f"QUESTION: {question.prompt}\n\nOPTIONS:\n"
+                f"QUESTION: {question.prompt}\n\n{heading}:\n"
                 f"{self._format_options(options)}\n\n"
                 f"Answer with exactly one letter: {', '.join(labels)}."
             )
-            prompt_text = self._build_prompt(state, block)
-            cand_logits = self._candidate_logits(prompt_text, ids)
-            raw = self._softmax_over_candidates(cand_logits, 1.0)
-            cal = self._softmax_over_candidates(cand_logits, t)
-            best_i = max(range(len(labels)), key=lambda i: cal[i])
-            latency_ms = (time.time() - t0) * 1000
-            return JudgeAnswer(
-                kind="choice",
-                answer=labels[best_i],
-                confidence=cal[best_i],
-                raw_logits=dict(zip(labels, cand_logits)),
-                raw_probs=dict(zip(labels, raw)),
-                calibrated_probs=dict(zip(labels, cal)),
-                temperature=t,
-                latency_ms=latency_ms,
-                state=state,
-                question=question,
-            )
-
-        if isinstance(question, ScoreQuestion):
-            options = question.scale
-            labels = [o.label for o in options]
-            ids = [self._label_token_id(l) for l in labels]
-            block = (
-                f"QUESTION: {question.prompt}\n\nSCALE (low to high):\n"
-                f"{self._format_options(options)}\n\n"
-                f"Answer with exactly one letter: {', '.join(labels)}."
-            )
-            prompt_text = self._build_prompt(state, block)
-            cand_logits = self._candidate_logits(prompt_text, ids)
-            raw = self._softmax_over_candidates(cand_logits, 1.0)
-            cal = self._softmax_over_candidates(cand_logits, t)
-            best_i = max(range(len(labels)), key=lambda i: cal[i])
-            latency_ms = (time.time() - t0) * 1000
-            return JudgeAnswer(
-                kind="score",
-                answer=labels[best_i],
-                ordinal=best_i,
-                confidence=cal[best_i],
-                raw_logits=dict(zip(labels, cand_logits)),
-                raw_probs=dict(zip(labels, raw)),
-                calibrated_probs=dict(zip(labels, cal)),
-                temperature=t,
-                latency_ms=latency_ms,
-                state=state,
-                question=question,
-            )
-
-        if isinstance(question, ProbabilityQuestion):
-            ids = [self._label_token_id(_TRUE_LABEL), self._label_token_id(_FALSE_LABEL)]
+        elif isinstance(question, ProbabilityQuestion):
+            labels = [_TRUE_LABEL, _FALSE_LABEL]
             block = (
                 f"STATEMENT: {question.statement}\n\n"
                 f"Is this statement true? Answer with exactly one letter: "
                 f"{_TRUE_LABEL} for true, {_FALSE_LABEL} for false."
             )
-            prompt_text = self._build_prompt(state, block)
-            cand_logits = self._candidate_logits(prompt_text, ids)
-            raw = self._softmax_over_candidates(cand_logits, 1.0)
-            cal = self._softmax_over_candidates(cand_logits, t)
-            p_true_raw, p_true_cal = raw[0], cal[0]
-            answer = "true" if p_true_cal >= 0.5 else "false"
-            confidence = p_true_cal if answer == "true" else 1 - p_true_cal
-            latency_ms = (time.time() - t0) * 1000
-            logit_true, logit_false = cand_logits
-            return JudgeAnswer(
-                kind="probability",
-                answer=answer,
-                confidence=confidence,
-                probability_true=p_true_cal,
-                raw_logits={"true": logit_true, "false": logit_false},
-                raw_probs={"true": p_true_raw, "false": raw[1]},
-                calibrated_probs={"true": p_true_cal, "false": cal[1]},
-                temperature=t,
-                latency_ms=latency_ms,
-                state=state,
-                question=question,
-            )
+        else:
+            raise TypeError(f"unsupported question type: {type(question)!r}")
 
-        raise TypeError(f"unsupported question type: {type(question)!r}")
+        cand_logits = self._candidate_logits(
+            self._build_prompt(state, block), [self._label_token_id(l) for l in labels]
+        )
+        raw = softmax(cand_logits, 1.0)
+        cal = softmax(cand_logits, t)
+        best_i = max(range(len(labels)), key=lambda i: cal[i])
+        latency_ms = (time.time() - t0) * 1000
+
+        if isinstance(question, ProbabilityQuestion):
+            # Reported under "true"/"false" rather than the T/F prompt
+            # tokens - callers care about the statement, not the encoding.
+            labels = ["true", "false"]
+            extra = {"probability_true": cal[0]}
+        else:
+            extra = {"ordinal": best_i} if is_score else {}
+
+
+        return JudgeAnswer(
+            kind=question.kind,
+            answer=labels[best_i],
+            confidence=cal[best_i],
+            raw_logits=dict(zip(labels, cand_logits)),
+            raw_probs=dict(zip(labels, raw)),
+            calibrated_probs=dict(zip(labels, cal)),
+            temperature=t,
+            latency_ms=latency_ms,
+            state=state,
+            question=question,
+            **extra,
+        )
 
 
 @lru_cache(maxsize=4)
-def get_judge(model_id: str | None = None, backend: str | None = None) -> Judge:
-    """Process-wide cached Judge instance per (model_id, backend), so a demo
-    or server doesn't reload weights on every call."""
-    return Judge(model_id=model_id, backend=backend)
+def get_judge(
+    model_id: str | None = None, backend: str | None = None, temperature: float = 1.0
+) -> Judge:
+    """Process-wide cached Judge instance per (model_id, backend,
+    temperature), so a demo or server doesn't reload weights on every call.
+
+    Loading is lazy in the sense that matters: the first caller pays for the
+    weights, everyone after that gets them for free.
+    """
+    return Judge(model_id=model_id, backend=backend, temperature=temperature)

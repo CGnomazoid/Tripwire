@@ -28,10 +28,8 @@ from supervisor import calibration_store
 from supervisor.audit_log import log_call
 from supervisor.judge import Judge
 from supervisor.multiline import assess_shell_command as _assess_shell_command
-from supervisor.questions import ALLOW_BLOCK, DEFAULT_UNCERTAIN_THRESHOLD, RISK_SCALE
+from supervisor.questions import ALLOW_BLOCK, RISK_NAMES, RISK_SCALE, decide, resolve_threshold
 from supervisor.types import ChoiceOption, ChoiceQuestion, ProbabilityQuestion
-
-_RISK_NAMES = {"A": "low", "B": "medium", "C": "high"}
 
 _judge: Judge | None = None
 
@@ -87,9 +85,9 @@ def assess_risk(state: str, reason: str | None = None) -> dict[str, str | float 
     """
     result = _get_judge().ask(state, RISK_SCALE)
     response = {
-        "risk": _RISK_NAMES[result.answer],
+        "risk": RISK_NAMES[result.answer],
         "confidence": round(result.confidence, 4),
-        "raw_probs": {_RISK_NAMES[k]: round(v, 4) for k, v in result.raw_probs.items()},
+        "raw_probs": {RISK_NAMES[k]: round(v, 4) for k, v in result.raw_probs.items()},
         "latency_ms": round(result.latency_ms, 1),
         "reason": reason,
     }
@@ -118,15 +116,9 @@ def should_block(
             forcing a binary call there would present a coin flip as a
             decision.
     """
-    threshold = DEFAULT_UNCERTAIN_THRESHOLD if confidence_threshold is None else confidence_threshold
+    threshold = resolve_threshold(confidence_threshold)
     result = _get_judge().ask(state, ALLOW_BLOCK)
-
-    if result.confidence < threshold:
-        decision = "uncertain"
-    elif result.answer == "B":
-        decision = "block"
-    else:
-        decision = "allow"
+    decision = decide(result.answer, result.confidence, threshold)
 
     if decision == "uncertain":
         message = (

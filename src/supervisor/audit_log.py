@@ -13,7 +13,9 @@ import json
 import time
 from pathlib import Path
 
-LOG_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "audit_log.jsonl"
+from supervisor.paths import AUDIT_LOG_PATH
+
+LOG_PATH: Path = AUDIT_LOG_PATH
 
 
 def log_call(*, tool: str, state: str, reason: str | None, result: dict) -> None:
@@ -24,6 +26,6 @@ def log_call(*, tool: str, state: str, reason: str | None, result: dict) -> None
         "reason": reason,
         "result": result,
     }
-    LOG_PATH.parent.mkdir(exist_ok=True)
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with LOG_PATH.open("a") as f:
         f.write(json.dumps(record) + "\n")
