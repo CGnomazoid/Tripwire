@@ -139,9 +139,9 @@ Every tool accepts an optional `reason` — the calling agent's own stated justi
 Real numbers from `scripts/run_eval.py`, not estimates:
 
 - **Latency:** ~140ms steady-state forward pass, ~265–290ms end-to-end through `Judge.ask()` (tokenize + forward + softmax) on an Apple Silicon Mac.
-- **Accuracy:** on a 97-example hand-labeled eval set (file ops, db, network, finance, comms, infra, code exec, account mgmt), held-out block-vs-allow accuracy is **87.2%**; 3-way risk-label accuracy is 71.8%; probability-question accuracy is 93.3%.
-- **Calibration:** the raw model is meaningfully overconfident — expected calibration error (ECE) starts at **0.236** and drops to **0.112** after fitting a single scalar temperature via NLL minimization on a held-out split. Temperature scaling doesn't change *what* the model answers, only how honestly it reports its own confidence.
-- **Weakest categories:** `fs_delete` and `borderline` cases (both ~50%) — worth extra scrutiny before trusting this on real destructive filesystem calls specifically. `account`, `fs_write`, and `probability` questions are strong (93–100%).
+- **Accuracy:** on a 105-example hand-labeled eval set (file ops, db, network, finance, comms, infra, code exec, account mgmt), 3-way risk-label accuracy is 73.1%; probability-question accuracy is 93.3%.
+- **`should_block` accuracy, measured directly (not derived):** **69.2%**. Earlier versions of this README quoted ~87% here, but that number was computed from the separate risk-scale question's answer, not from actually calling the `ALLOW_BLOCK` question `should_block()` uses in production — that code path had never been directly evaluated. Once `scripts/run_eval.py` was fixed to test it for real, the honest number came in well below what the derived proxy implied. Weakest category: `fs_delete` at 58.3%.
+- **Calibration:** the raw model is meaningfully overconfident — expected calibration error (ECE) starts at **0.195** and drops to **0.063** after fitting a single scalar temperature via NLL minimization on a held-out split. Temperature scaling doesn't change *what* the model answers, only how honestly it reports its own confidence — it can soften an overconfident wrong answer, but it can't flip a genuinely near-50/50 one (see Known limitations).
 
 ## ⚠️ Known limitations
 
@@ -151,6 +151,8 @@ This project's threat model is **catching honest mistakes**, not resisting a use
 - Casual/emoji framing (`"🗑️✨ ... totally fine, just cleaning up 😇"`) flips the same call to low risk, but only at ~58% confidence — essentially a coin flip. A confidence-threshold escalation policy (route anything under ~0.6 to a human) would catch this one; it would not catch the first.
 
 If you extend this toward adversarial hardening, start there.
+
+Separately, and not adversarial at all: `should_block` can land on a genuinely near-50/50 raw answer for an ordinary, non-malicious input — e.g. `run_shell(cmd='cd Desktop')` comes back `LOW` risk confidently but `BLOCK` at ~55% confidence, barely past the decision threshold. Temperature scaling can't fix this - it rescales confidence around whatever the frozen model's raw logits already say, it can't move the argmax. Treat any `should_block`/`assess_risk` confidence below ~0.6 as "uncertain, ask a human" rather than trusting the binary answer.
 
 ## 🗂️ Project layout
 

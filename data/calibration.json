@@ -1,9 +1,10 @@
 {
   "model_id": "mlx-community/Qwen2.5-7B-Instruct-4bit",
-  "temperature": 3.32603167593783,
-  "n_calibration_examples": 58,
-  "held_out_ece_raw": 0.23634342936086197,
-  "held_out_ece_calibrated": 0.11199040578762344,
-  "held_out_accuracy": 0.717948717948718,
-  "held_out_block_accuracy": 0.8717948717948718
+  "temperature": 3.825529836604796,
+  "n_calibration_examples": 117,
+  "held_out_ece_raw": 0.19498958561645224,
+  "held_out_ece_calibrated": 0.0628718239815866,
+  "held_out_accuracy": 0.7307692307692307,
+  "held_out_block_accuracy_derived": 0.8787878787878788,
+  "held_out_block_accuracy_direct": 0.6923076923076923
 }
