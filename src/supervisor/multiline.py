@@ -20,11 +20,11 @@ from __future__ import annotations
 
 from supervisor.judge import Judge
 from supervisor.questions import (
-    ALLOW_BLOCK,
     DECISION_ORDER,
     RISK_NAMES,
     RISK_ORDER,
     RISK_SCALE,
+    ask_allow_block,
     decide,
 )
 from supervisor.quoting import quote_mask
@@ -101,7 +101,7 @@ def assess_shell_command(judge: Judge, cmd: str, confidence_threshold: float | N
 def _judge_one(judge: Judge, sub: str, confidence_threshold: float | None) -> dict:
     state = f"Tool call: run_shell(cmd='{sub}')"
     risk = judge.ask(state, RISK_SCALE)
-    block = judge.ask(state, ALLOW_BLOCK)
+    block = ask_allow_block(judge, state)
     return {
         "cmd": sub,
         "risk_label": risk.answer,

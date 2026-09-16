@@ -58,6 +58,53 @@ def make_judge(monkeypatch):
     return factory
 
 
+class MeaningAwareFakeBackend(FakeBackend):
+    """Like FakeBackend, but keys logits by what an option's text actually
+    means (its "low"/"medium"/"high"/"allow"/"block" keyword) rather than by
+    its letter.
+
+    ask_allow_block() (questions.py) asks the same ALLOW_BLOCK question
+    twice with the option order swapped, to detect a model just picking a
+    letter it likes rather than reasoning about the state - see judge.py's
+    module docstring. A plain letter-keyed FakeBackend can't represent
+    "reasons about meaning" at all: since it returns the same logit for
+    letter B regardless of what B currently means, the two orderings are
+    *mathematically guaranteed* to disagree on meaning every time, which
+    would make every assess_shell_command test "uncertain" no matter what
+    logits were chosen. This subclass reads the option text that was
+    actually rendered into the prompt for each candidate, so it responds to
+    what the option means - what a real model conditions on - not which
+    letter slot it landed in this call.
+    """
+
+    def __init__(self, logits_by_meaning: dict[str, float]):
+        super().__init__({})
+        self._logits_by_meaning = logits_by_meaning
+
+    def candidate_logits(self, prompt_text: str, candidate_ids: list[int]) -> list[float]:
+        self.prompts.append(prompt_text)
+        keywords = ("high risk", "medium risk", "low risk", "block", "allow")
+        out = []
+        for cid in candidate_ids:
+            letter = chr(cid)
+            line = next(l for l in prompt_text.splitlines() if l.strip().startswith(f"{letter})"))
+            meaning = next(k.split()[0] for k in keywords if k in line)
+            out.append(self._logits_by_meaning[meaning])
+        return out
+
+
+@pytest.fixture
+def make_meaning_aware_judge(monkeypatch):
+    def factory(logits_by_meaning: dict[str, float], **kwargs) -> Judge:
+        backend = MeaningAwareFakeBackend(logits_by_meaning)
+        monkeypatch.setattr("supervisor.judge.load_backend", lambda name, model_id: backend)
+        judge = Judge(backend="torch", model_id="stub", **kwargs)
+        judge.fake_backend = backend
+        return judge
+
+    return factory
+
+
 # -- answer shaping, per question type ------------------------------------
 
 def test_choice_answer_is_the_argmax_label(make_judge):
@@ -188,8 +235,9 @@ def test_unsupported_question_type_raises_type_error(make_judge):
 
 # -- the multi-command path, end to end without a model -------------------
 
-def test_assess_shell_command_keeps_the_worst_verdict(make_judge):
-    judge = make_judge({"A": 0.0, "B": 5.0, "C": 9.0})  # confident block, high risk
+def test_assess_shell_command_keeps_the_worst_verdict(make_meaning_aware_judge):
+    # confident block, high risk
+    judge = make_meaning_aware_judge({"low": 0.0, "medium": 5.0, "high": 9.0, "allow": 0.0, "block": 5.0})
     result = assess_shell_command(judge, "cd /tmp\nrm -rf /")
 
     assert result["decision"] == "block"
@@ -201,19 +249,22 @@ def test_assess_shell_command_keeps_the_worst_verdict(make_judge):
     }
 
 
-def test_assess_shell_command_reports_uncertain_on_a_coin_flip(make_judge):
-    judge = make_judge({"A": 0.0, "B": 0.1, "C": 0.0})  # ~52% - under the 0.6 default
+def test_assess_shell_command_reports_uncertain_on_a_coin_flip(make_meaning_aware_judge):
+    # allow vs block ~52% - under the 0.6 default
+    judge = make_meaning_aware_judge({"low": 0.0, "medium": 0.0, "high": 0.0, "allow": 0.0, "block": 0.1})
     result = assess_shell_command(judge, "cd Desktop")
 
     assert result["decision"] == "uncertain"
     assert result["commands"][0]["decision_confidence"] < 0.6
 
 
-def test_assess_shell_command_judges_a_repeated_command_once(make_judge):
-    judge = make_judge({"A": 5.0, "B": 0.0, "C": 0.0})
+def test_assess_shell_command_judges_a_repeated_command_once(make_meaning_aware_judge):
+    judge = make_meaning_aware_judge({"low": 5.0, "medium": 0.0, "high": 0.0, "allow": 5.0, "block": 0.0})
     result = assess_shell_command(judge, "make build; make build; make test")
 
-    # three commands reported, but only two distinct ones judged, at two
-    # forward passes each (RISK_SCALE + ALLOW_BLOCK)
+    # three commands reported, but only two distinct ones judged, at three
+    # forward passes each (RISK_SCALE + ALLOW_BLOCK asked twice, in both
+    # option orders, to cancel out label-position bias - see
+    # questions.ask_allow_block)
     assert result["num_commands"] == 3
-    assert len(judge.fake_backend.prompts) == 4
+    assert len(judge.fake_backend.prompts) == 6

@@ -28,7 +28,7 @@ from supervisor import calibration_store
 from supervisor.audit_log import log_call
 from supervisor.judge import Judge
 from supervisor.multiline import assess_shell_command as _assess_shell_command
-from supervisor.questions import ALLOW_BLOCK, RISK_NAMES, RISK_SCALE, decide, resolve_threshold
+from supervisor.questions import RISK_NAMES, RISK_SCALE, ask_allow_block, decide, resolve_threshold
 from supervisor.types import ChoiceOption, ChoiceQuestion, ProbabilityQuestion
 
 _judge: Judge | None = None
@@ -117,7 +117,7 @@ def should_block(
             decision.
     """
     threshold = resolve_threshold(confidence_threshold)
-    result = _get_judge().ask(state, ALLOW_BLOCK)
+    result = ask_allow_block(_get_judge(), state)
     decision = decide(result.answer, result.confidence, threshold)
 
     if decision == "uncertain":
