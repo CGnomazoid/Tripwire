@@ -8,6 +8,16 @@ a hand-rolled agent loop, anything that speaks MCP) has to choose to call
 executes tool calls itself; it only ever reads the text description it's
 given and returns a judgment.
 
+Every tool takes an optional `reason`: the calling agent's own stated
+justification for why it wants to do this. It is NEVER passed into
+Judge.ask() or the model's prompt - the risk score is a pure function of
+`state` alone. `reason` is only logged (audit_log.py) and echoed back in the
+response, for two purposes: troubleshooting later, and giving a human who
+sees a blocked action some context on what the agent thought it was doing.
+Keeping this split (logged/displayed, but never scored) matters - see the
+readme's Status section for why folding it into the score would reopen a
+way for an agent to talk its way past the gate.
+
 Run directly:      ./run python -m supervisor.mcp_server
 As an MCP client config entry, point `command` at the repo's `run` script
 (sidesteps the uv/.pth gotcha documented in readme.md) with args
@@ -19,6 +29,7 @@ from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
 
+from supervisor.audit_log import log_call
 from supervisor.judge import Judge
 from supervisor.questions import ALLOW_BLOCK, RISK_SCALE
 from supervisor.types import ChoiceOption, ChoiceQuestion, ProbabilityQuestion
@@ -58,46 +69,68 @@ mcp = MCPServer(
         "and mass communication. This server is advisory only: it returns "
         "a calibrated confidence score, not a guarantee, and it never "
         "executes any tool call itself - only the caller decides what to "
-        "do with the judgment."
+        "do with the judgment. Pass `reason` (why you want to do this) on "
+        "every call if you can - it doesn't change the score, but it's "
+        "logged and shown to the human if the action gets blocked, so they "
+        "have context instead of just a bare denial."
     ),
 )
 
 
 @mcp.tool(structured_output=True)
-def assess_risk(state: str) -> dict[str, str | float | dict]:
+def assess_risk(state: str, reason: str | None = None) -> dict[str, str | float | dict | None]:
     """Judge how risky a proposed tool call is, on a low/medium/high scale.
 
     Args:
         state: plain-text description of the tool call about to be made,
             e.g. "Tool call: delete_file(path='/etc/passwd')".
+        reason: optional - why you (the calling agent) believe this action
+            is needed. Does not affect the score. Logged and echoed back so
+            a human can see it if this gets flagged.
     """
     result = _get_judge().ask(state, RISK_SCALE)
-    return {
+    response = {
         "risk": _RISK_NAMES[result.answer],
         "confidence": round(result.confidence, 4),
         "raw_probs": {_RISK_NAMES[k]: round(v, 4) for k, v in result.raw_probs.items()},
         "latency_ms": round(result.latency_ms, 1),
+        "reason": reason,
     }
+    log_call(tool="assess_risk", state=state, reason=reason, result=response)
+    return response
 
 
 @mcp.tool(structured_output=True)
-def should_block(state: str) -> dict[str, str | float]:
+def should_block(state: str, reason: str | None = None) -> dict[str, str | float | None]:
     """Decide whether a proposed tool call should be blocked pending human
     confirmation, or is fine to run automatically.
 
     Args:
         state: plain-text description of the tool call about to be made.
+        reason: optional - why you (the calling agent) believe this action
+            is needed. Does not affect the decision. Logged and echoed back
+            so a human can see it if this gets blocked.
     """
     result = _get_judge().ask(state, ALLOW_BLOCK)
-    return {
-        "decision": "block" if result.answer == "B" else "allow",
+    decision = "block" if result.answer == "B" else "allow"
+
+    message = f"{decision.capitalize()} (confidence {result.confidence:.0%})."
+    if decision == "block" and reason:
+        message += f" Agent's stated reason: {reason!r}"
+
+    response = {
+        "decision": decision,
         "confidence": round(result.confidence, 4),
         "latency_ms": round(result.latency_ms, 1),
+        "reason": reason,
+        "message": message,
     }
+    log_call(tool="should_block", state=state, reason=reason, result=response)
+    return response
 
 
 @mcp.tool(structured_output=True)
-def judge_statement(state: str, statement: str) -> dict[str, str | float]:
+def judge_statement(state: str, statement: str, reason: str | None = None) -> dict[str, str | float | None]:
     """Get a calibrated P(statement is true) about a proposed tool call.
     Useful for targeted checks like "is this reversible?" or "does this
     affect more than one user?" that don't fit the risk/allow-block framing.
@@ -106,18 +139,25 @@ def judge_statement(state: str, statement: str) -> dict[str, str | float]:
         state: plain-text description of the tool call.
         statement: the yes/no claim to evaluate, e.g. "This action is
             reversible."
+        reason: optional - why you (the calling agent) believe this action
+            is needed. Does not affect the answer. Logged and echoed back.
     """
     result = _get_judge().ask(state, ProbabilityQuestion(statement=statement))
-    return {
+    response = {
         "probability_true": round(result.probability_true, 4),
         "answer": result.answer,
         "confidence": round(result.confidence, 4),
         "latency_ms": round(result.latency_ms, 1),
+        "reason": reason,
     }
+    log_call(tool="judge_statement", state=state, reason=reason, result=response)
+    return response
 
 
 @mcp.tool(structured_output=True)
-def ask_custom_choice(state: str, prompt: str, options: list[dict]) -> dict[str, str | float | dict]:
+def ask_custom_choice(
+    state: str, prompt: str, options: list[dict], reason: str | None = None
+) -> dict[str, str | float | dict | None]:
     """Ask a custom multiple-choice question about a proposed tool call, for
     decisions that don't fit the built-in risk/allow-block framing.
 
@@ -127,18 +167,23 @@ def ask_custom_choice(state: str, prompt: str, options: list[dict]) -> dict[str,
         options: 2-4 options, each {"label": "A", "text": "description"}.
             Labels must be single letters (A-Z tokenize to exactly one
             token, which the underlying model needs).
+        reason: optional - why you (the calling agent) believe this action
+            is needed. Does not affect the answer. Logged and echoed back.
     """
     question = ChoiceQuestion(
         prompt=prompt,
         options=[ChoiceOption(label=o["label"], text=o["text"]) for o in options],
     )
     result = _get_judge().ask(state, question)
-    return {
+    response = {
         "answer": result.answer,
         "confidence": round(result.confidence, 4),
         "raw_probs": {k: round(v, 4) for k, v in result.raw_probs.items()},
         "latency_ms": round(result.latency_ms, 1),
+        "reason": reason,
     }
+    log_call(tool="ask_custom_choice", state=state, reason=reason, result=response)
+    return response
 
 
 def main() -> None:
