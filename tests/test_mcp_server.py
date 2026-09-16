@@ -29,9 +29,9 @@ SKIP_DIRS = {".venv", ".git", "__pycache__", ".pytest_cache", "demo/sandbox"}
 # excludes it from the repo.
 SKIP_FILES = {"data/audit_log.jsonl"}
 # .DS_Store: macOS/Finder metadata, gitignored, and observed to get
-# created/touched by Finder or iCloud Drive indexing mid-test-run with zero
-# involvement from this project's code - matched by filename since it can
-# appear in any directory, not just the ones in SKIP_DIRS.
+# created/touched by Finder mid-test-run with zero involvement from this
+# project's code - matched by filename since it can appear in any
+# directory, not just the ones in SKIP_DIRS.
 SKIP_FILENAMES = {".DS_Store"}
 
 
@@ -54,16 +54,11 @@ def _tree_hash() -> str:
 
 @pytest.fixture
 async def session():
-    # Spawn via ./run, exactly the invocation documented for real MCP client
-    # configs - this also sidesteps the .pth gotcha (readme.md) rather than
-    # needing to special-case env vars just for the test. mcp's stdio_client
-    # only forwards a small env allowlist to the child by default (PATH,
-    # HOME, etc, not PYTHONPATH) as a deliberate security default, so a bare
-    # `sys.executable -m supervisor.mcp_server` here would be flaky in
-    # exactly the way the .pth bug already burned us once.
+    # Spawn via `uv run --directory`, exactly the invocation documented for
+    # real MCP client configs (readme.md).
     params = StdioServerParameters(
-        command=str(ROOT / "run"),
-        args=["python", "-m", "supervisor.mcp_server"],
+        command="uv",
+        args=["run", "--directory", str(ROOT), "python", "-m", "supervisor.mcp_server"],
         cwd=str(ROOT),
     )
     async with stdio_client(params) as (read, write):

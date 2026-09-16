@@ -68,26 +68,24 @@ cd Tripwire
 
 Both setup scripts detect the right backend from the platform (and GPU presence) and run `uv sync --extra <name>` for you; set `SUPERVISOR_EXTRA` (`$env:SUPERVISOR_EXTRA` on Windows) to override the choice. First run downloads the judge model from Hugging Face — the MLX backend defaults to a pre-quantized 4-bit model (~4.3GB); the PyTorch backend downloads the full-precision checkpoint and quantizes it to 4-bit on load when bitsandbytes is available.
 
-> **Always use `./run` (`.\run.ps1` on Windows) instead of calling `uv run` / `python` directly.** It's a one-line wrapper that guarantees `PYTHONPATH` is set before the interpreter starts, and it's also the documented way to point an MCP client at the server.
-
 The CUDA backend is implemented against the same single-forward-pass contract as MLX and follows transformers' documented quantized-loading API, but hasn't been exercised on real Nvidia hardware as part of this project (the reference machine is Apple Silicon) — if you try it, [open an issue](https://github.com/CGnomazoid/Tripwire/issues) with what did or didn't work.
 
 ## 🚀 Try it
 
 ```bash
 # Interactive playground — read-only by construction, safe to throw anything at it
-./run python scripts/try_it.py
+uv run python scripts/try_it.py
 
 # Or single-shot:
-./run python scripts/try_it.py "Tool call: run_shell(cmd='rm -rf /')"
+uv run python scripts/try_it.py "Tool call: run_shell(cmd='rm -rf /')"
 
 # Prove the mechanism + see calibration numbers
-./run python scripts/run_spike.py
-./run python scripts/run_eval.py
+uv run python scripts/run_spike.py
+uv run python scripts/run_eval.py
 
 # Live demo: a toy agent loop that actually executes benign calls
 # and blocks the risky ones using the fitted calibration
-./run python demo/agent_demo.py
+uv run python demo/agent_demo.py
 ```
 
 `scripts/try_it.py` never calls `exec`/`eval`/`subprocess`/`os.system` on your input — whatever you type is only ever fed to the model as text. No matter how dangerous it reads, nothing runs.
@@ -105,21 +103,21 @@ judge = Judge(backend="torch", model_id="Qwen/Qwen2.5-7B-Instruct")
 Or without touching code, via environment variables (also picked up by `try_it.py`, the eval scripts, and the MCP server):
 
 ```bash
-SUPERVISOR_BACKEND=torch SUPERVISOR_MODEL_ID=Qwen/Qwen2.5-7B-Instruct ./run python scripts/try_it.py
+SUPERVISOR_BACKEND=torch SUPERVISOR_MODEL_ID=Qwen/Qwen2.5-7B-Instruct uv run python scripts/try_it.py
 ```
 
 ## 🔌 Use it as an MCP server
 
 Tripwire exposes the judge as opt-in [MCP](https://modelcontextprotocol.io) tools, so any MCP-compatible client (Claude Desktop, Claude Code, etc.) can ask it before acting — nothing calls these automatically, a caller has to choose to.
 
-Point your MCP client at this repo's `run` script:
+Point your MCP client at `uv run` with `--directory` set to this repo:
 
 ```json
 {
   "mcpServers": {
     "tripwire": {
-      "command": "/absolute/path/to/Tripwire/run",
-      "args": ["python", "-m", "supervisor.mcp_server"]
+      "command": "uv",
+      "args": ["run", "--directory", "/absolute/path/to/Tripwire", "python", "-m", "supervisor.mcp_server"]
     }
   }
 }
@@ -141,18 +139,18 @@ Every tool accepts an optional `reason` — the calling agent's own stated justi
 
 Real numbers from `scripts/run_eval.py`, not estimates:
 
-- **Latency:** ~140ms steady-state forward pass, ~265–290ms end-to-end through `Judge.ask()` (tokenize + forward + softmax) on an Apple Silicon Mac.
-- **Accuracy:** on a 105-example hand-labeled eval set (file ops, db, network, finance, comms, infra, code exec, account mgmt), 3-way risk-label accuracy is 73.1%; probability-question accuracy is 93.3%.
-- **`should_block` accuracy, measured directly (not derived):** **69.2%**. Earlier versions of this README quoted ~87% here, but that number was computed from the separate risk-scale question's answer, not from actually calling the `ALLOW_BLOCK` question `should_block()` uses in production — that code path had never been directly evaluated. Once `scripts/run_eval.py` was fixed to test it for real, the honest number came in well below what the derived proxy implied. Weakest category: `fs_delete` at 58.3%.
-- **Calibration:** the raw model is meaningfully overconfident — expected calibration error (ECE) starts at **0.195** and drops to **0.063** after fitting a single scalar temperature via NLL minimization on a held-out split. Temperature scaling doesn't change *what* the model answers, only how honestly it reports its own confidence — it can soften an overconfident wrong answer, but it can't flip a genuinely near-50/50 one (see Known limitations).
+- **Latency:** ~183ms mean end-to-end through `Judge.ask()` (min 178ms, max 222ms; tokenize + forward + softmax), measured on an Apple M4 Max MacBook Pro (14-core CPU / 32-core GPU, 36GB unified memory).
+- **Accuracy:** on a 164-example hand-labeled eval set (file ops, db, network, finance, comms, infra, code exec, account mgmt, plus a deliberately near-50/50 `borderline` bucket), held-out answer accuracy is 70.2%; probability-question accuracy (full dataset) is 84.2%.
+- **`should_block` accuracy, measured directly (not derived):** **77.6%**. Earlier versions of this README quoted a number computed from the separate risk-scale question's answer, not from actually calling the `ALLOW_BLOCK` question `should_block()` uses in production. Weakest true category: `network` at 68.8% (the intentionally ambiguous `borderline` bucket scores lower still, at 47.4%, but that's by design — see `scripts/gen_dataset.py`).
+- **Calibration:** the raw model is meaningfully overconfident — expected calibration error (ECE) starts at **0.214** and drops to **0.075** after fitting a single scalar temperature (T=6.05) via NLL minimization on a held-out split. Temperature scaling doesn't change *what* the model answers, only how honestly it reports its own confidence — it can soften an overconfident wrong answer, but it can't flip a genuinely near-50/50 one (see Known limitations).
 
 ### Model comparison: 7B vs 14B
 
 The default model is `mlx-community/Qwen2.5-7B-Instruct-4bit`. A same-eval-set comparison against the 14B variant (same lineage/tuning, just more capacity — an intentionally narrower experiment than swapping to a differently-specialized model like a coding fine-tune, which was tried and came out clearly worse across every metric):
 
-![Bar chart comparing Qwen2.5-7B and 14B (Instruct, 4-bit) on three metrics: answer accuracy (73.1% vs 78.2%), should_block accuracy (69.2% vs 74.4%), and calibration ECE (0.063 vs 0.095, lower is better). 14B wins the first two; 7B wins ECE.](assets/model_comparison_7b_14b.svg)
+![Bar chart comparing Qwen2.5-7B and 14B (Instruct, 4-bit) on four metrics: answer accuracy (70.2% vs 60.5%), should_block accuracy (77.6% vs 60.3%), calibration ECE (0.075 vs 0.134, lower is better), and mean end-to-end latency (183ms vs 358ms, lower is better). 7B wins all four.](assets/model_comparison_7b_14b.svg)
 
-14B is a real, not marginal, improvement on the metric that matters most (`should_block` direct accuracy) — and it's concentrated exactly where 7B was weakest: `fs_delete` should_block accuracy goes from 58.3% to 83.3%, `fs_read` from 62.5% to 87.5%. It also resolves the specific real-world cases that motivated this comparison (`cd Desktop` now correctly lands `ALLOW` at 83% confidence instead of a ~55% coin flip). The honest tradeoff: 14B's raw confidence is more overconfident, and even the best-fit temperature (T≈8.0, confirmed by testing search ranges up to 50) only gets its ECE to 0.095 — worse than 7B's 0.063. Latency roughly doubles (still comfortably under 1s for a single call: ~470-550ms vs ~250-290ms), and so does memory footprint.
+7B now wins across the board. Earlier revisions of this README had 14B ahead on accuracy and `should_block`, measured on a smaller (105-example) eval set; since then the eval set grew to 164 examples and the judge prompts were split per question kind, and re-running the comparison on the current code flips the result. The gap is concentrated in specific categories — 14B's `should_block` accuracy on `fs_read` drops to 63.6% against 7B's 90.9%, while `fs_delete` is a wash (78.6% for both). 14B is also more raw-overconfident, and even its own best-fit temperature (T≈8.0, same as previously measured) only gets its ECE to 0.134 — worse than 7B's 0.075. On top of losing on every accuracy metric, it's also ~2x slower (358ms vs 183ms mean, measured on the same Apple M4 Max) and roughly doubles memory footprint, so there's no remaining case for the 14B variant on this eval set.
 
 Not switched as the default yet, but it's a first-class option, not just an untested env var: `data/calibration.json` ships with a real, precomputed calibration entry for both models (keyed by model ID - see `src/supervisor/calibration_store.py`), so switching doesn't silently apply the wrong temperature the way it would have earlier in this project. Just set `SUPERVISOR_MODEL_ID=mlx-community/Qwen2.5-14B-Instruct-4bit` and the right calibration is picked up automatically.
 
@@ -180,8 +178,8 @@ data/                  generated eval/calibration datasets + fitted calibration.
 ## 🧪 Testing
 
 ```bash
-./run pytest -q                # fast unit tests, no model load
-./run pytest -m slow -v        # everything that loads the model (judge + MCP integration + adversarial)
+uv run pytest -q                # fast unit tests, no model load
+uv run pytest -m slow -v        # everything that loads the model (judge + MCP integration + adversarial)
 ```
 
 Every test that touches the model also hashes the whole repo tree before and after running — including deliberately destructive-sounding inputs like `rm -rf /` — to prove nothing actually executed.

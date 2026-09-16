@@ -1,9 +1,0 @@
-#!/usr/bin/env bash
-# Wrapper that sidesteps a macOS/iCloud-Drive-specific uv gotcha: uv
-# periodically sets the "hidden" file flag on its editable-install .pth
-# file, which recent CPython point releases (3.13.12+, 3.14+) silently skip
-# in site.py, breaking `import supervisor` with no error at all. PYTHONPATH
-# is read by the interpreter before that .pth-scanning logic ever runs, so
-# it works no matter what state the .pth file's flags are in.
-cd "$(dirname "$0")"
-exec uv run --env-file .env "$@"

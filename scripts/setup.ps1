@@ -16,5 +16,5 @@ if (-not $extra) {
 Write-Host "installing with --extra $extra"
 uv sync --extra $extra
 
-Write-Host "done. verifying import via .\run.ps1 ..."
-& "$PSScriptRoot\..\run.ps1" python -c "import supervisor; print('OK:', supervisor.__file__)"
+Write-Host "done. verifying import..."
+uv run python -c "import supervisor; print('OK:', supervisor.__file__)"

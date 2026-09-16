@@ -17,9 +17,9 @@ sees a blocked action some context on what the agent thought it was doing.
 Keeping this split (logged/displayed, but never scored) matters - folding it
 into the score would reopen a way for an agent to talk its way past the gate.
 
-Run directly:      ./run python -m supervisor.mcp_server
-As an MCP client config entry, point `command` at the repo's `run` script
-(`run.ps1` on Windows) with args ["python", "-m", "supervisor.mcp_server"].
+Run directly:      uv run python -m supervisor.mcp_server
+As an MCP client config entry, point `command` at `uv` with args
+["run", "--directory", "/absolute/path/to/repo", "python", "-m", "supervisor.mcp_server"].
 """
 
 from mcp.server.mcpserver import MCPServer
