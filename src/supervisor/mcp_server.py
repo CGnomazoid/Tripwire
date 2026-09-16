@@ -22,38 +22,32 @@ As an MCP client config entry, point `command` at the repo's `run` script
 (`run.ps1` on Windows) with args ["python", "-m", "supervisor.mcp_server"].
 """
 
-import json
-from pathlib import Path
-
 from mcp.server.mcpserver import MCPServer
 
+from supervisor import calibration_store
 from supervisor.audit_log import log_call
 from supervisor.judge import Judge
 from supervisor.multiline import assess_shell_command as _assess_shell_command
 from supervisor.questions import ALLOW_BLOCK, DEFAULT_UNCERTAIN_THRESHOLD, RISK_SCALE
 from supervisor.types import ChoiceOption, ChoiceQuestion, ProbabilityQuestion
 
-ROOT = Path(__file__).resolve().parent.parent.parent
-CALIBRATION_PATH = ROOT / "data" / "calibration.json"
-
 _RISK_NAMES = {"A": "low", "B": "medium", "C": "high"}
 
 _judge: Judge | None = None
 
 
-def _load_temperature() -> float:
-    if CALIBRATION_PATH.exists():
-        return json.loads(CALIBRATION_PATH.read_text())["temperature"]
-    return 1.0
-
-
 def _get_judge() -> Judge:
     """Lazy singleton: load weights on first tool call, not at server
     startup, so the MCP initialize handshake doesn't block on a ~50s
-    first-ever model download."""
+    first-ever model download. Calibration is looked up AFTER construction,
+    keyed on whatever model_id Judge actually resolved to (it may differ
+    from any hardcoded default - see SUPERVISOR_MODEL_ID/SUPERVISOR_BACKEND)
+    so a model swap can't accidentally pick up a different model's
+    temperature."""
     global _judge
     if _judge is None:
-        _judge = Judge(temperature=_load_temperature())
+        _judge = Judge()
+        _judge.temperature = calibration_store.load_temperature(_judge.model_id)
     return _judge
 
 

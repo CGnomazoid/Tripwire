@@ -1,10 +1,20 @@
 {
-  "model_id": "mlx-community/Qwen2.5-7B-Instruct-4bit",
-  "temperature": 3.825529836604796,
-  "n_calibration_examples": 117,
-  "held_out_ece_raw": 0.19498958561645224,
-  "held_out_ece_calibrated": 0.0628718239815866,
-  "held_out_accuracy": 0.7307692307692307,
-  "held_out_block_accuracy_derived": 0.8787878787878788,
-  "held_out_block_accuracy_direct": 0.6923076923076923
+  "mlx-community/Qwen2.5-7B-Instruct-4bit": {
+    "temperature": 3.825529836604796,
+    "n_calibration_examples": 117,
+    "held_out_ece_raw": 0.19498958561645224,
+    "held_out_ece_calibrated": 0.0628718239815866,
+    "held_out_accuracy": 0.7307692307692307,
+    "held_out_block_accuracy_derived": 0.8787878787878788,
+    "held_out_block_accuracy_direct": 0.6923076923076923
+  },
+  "mlx-community/Qwen2.5-14B-Instruct-4bit": {
+    "temperature": 7.999999999999998,
+    "n_calibration_examples": 117,
+    "held_out_ece_raw": 0.20879244636548927,
+    "held_out_ece_calibrated": 0.09548115331014784,
+    "held_out_accuracy": 0.782051282051282,
+    "held_out_block_accuracy_derived": 0.8787878787878788,
+    "held_out_block_accuracy_direct": 0.7435897435897436
+  }
 }

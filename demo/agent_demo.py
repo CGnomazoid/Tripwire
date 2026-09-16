@@ -9,19 +9,17 @@ they run and would need human confirmation to proceed.
 Run: uv run python demo/agent_demo.py
 """
 
-import json
 import time
 from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
 
-from supervisor import Judge, RISK_SCALE
+from supervisor import Judge, RISK_SCALE, calibration_store
 from supervisor.audit_log import log_call
 
 ROOT = Path(__file__).resolve().parent.parent
 SANDBOX = Path(__file__).resolve().parent / "sandbox"
-CALIBRATION_PATH = ROOT / "data" / "calibration.json"
 
 console = Console()
 
@@ -95,19 +93,12 @@ TOOLS = {
 }
 
 
-def load_temperature() -> float:
-    if CALIBRATION_PATH.exists():
-        data = json.loads(CALIBRATION_PATH.read_text())
-        return data["temperature"]
-    return 1.0
-
-
 def main() -> None:
     SANDBOX.mkdir(exist_ok=True)
-    temperature = load_temperature()
-    console.print(f"[bold]Loading judge (calibrated T={temperature:.3f})...[/bold]")
-    judge = Judge(temperature=temperature)
-    console.print(f"Loaded in {judge.load_time_s:.2f}s\n")
+    console.print("[bold]Loading judge...[/bold]")
+    judge = Judge()
+    judge.temperature = calibration_store.load_temperature(judge.model_id)
+    console.print(f"Loaded {judge.model_id} in {judge.load_time_s:.2f}s (calibrated T={judge.temperature:.3f})\n")
 
     console.rule("[bold]Agent loop starting[/bold]")
     for tool_name, kwargs, state, reason in AGENT_QUEUE:

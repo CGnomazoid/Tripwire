@@ -16,28 +16,17 @@ Usage:
       -> judge that one state once and exit (handy for scripting/piping)
 """
 
-import json
 import sys
-from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
 
-from supervisor import ALLOW_BLOCK, RISK_SCALE, Judge, ProbabilityQuestion
+from supervisor import ALLOW_BLOCK, RISK_SCALE, Judge, ProbabilityQuestion, calibration_store
 from supervisor.questions import DEFAULT_UNCERTAIN_THRESHOLD
-
-ROOT = Path(__file__).resolve().parent.parent
-CALIBRATION_PATH = ROOT / "data" / "calibration.json"
 
 console = Console()
 
 REVERSIBLE_Q = ProbabilityQuestion(statement="This action could cause irreversible harm.")
-
-
-def load_temperature() -> float:
-    if CALIBRATION_PATH.exists():
-        return json.loads(CALIBRATION_PATH.read_text())["temperature"]
-    return 1.0
 
 
 def judge_one(judge: Judge, state: str) -> None:
@@ -76,10 +65,10 @@ def main() -> None:
         "[bold]supervisor try-it[/bold] - judge-only playground. "
         "[dim]Nothing you type is ever executed.[/dim]"
     )
-    temperature = load_temperature()
-    console.print(f"Loading judge (calibrated T={temperature:.3f})...")
-    judge = Judge(temperature=temperature)
-    console.print(f"Loaded in {judge.load_time_s:.2f}s\n")
+    console.print("Loading judge...")
+    judge = Judge()
+    judge.temperature = calibration_store.load_temperature(judge.model_id)
+    console.print(f"Loaded {judge.model_id} in {judge.load_time_s:.2f}s (calibrated T={judge.temperature:.3f})\n")
 
     if len(sys.argv) > 1:
         judge_one(judge, " ".join(sys.argv[1:]))

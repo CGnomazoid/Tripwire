@@ -17,12 +17,11 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
-from supervisor import ALLOW_BLOCK, Judge, RISK_SCALE
+from supervisor import ALLOW_BLOCK, Judge, RISK_SCALE, calibration_store
 from supervisor.calibration import CalibrationExample, expected_calibration_error, fit_temperature
 from supervisor.types import ProbabilityQuestion
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "eval.jsonl"
-CALIBRATION_OUT = Path(__file__).resolve().parent.parent / "data" / "calibration.json"
 SEED = 1234
 CALIBRATION_FRACTION = 0.6
 
@@ -186,8 +185,10 @@ def main() -> None:
     console.print(category_table("Per-category ALLOW_BLOCK accuracy (full dataset, informational)", "choice_block"))
     console.print(category_table("Per-category PROBABILITY accuracy (full dataset, informational)", "probability"))
 
-    CALIBRATION_OUT.write_text(json.dumps({
-        "model_id": judge.model_id,
+    # Merged into the store under judge.model_id, not overwritten wholesale -
+    # calibration.json holds one entry per model, so evaluating a different
+    # model doesn't destroy an already-calibrated one (see calibration_store.py).
+    calibration_store.save_entry(judge.model_id, {
         "temperature": temperature,
         "n_calibration_examples": len(cal_records),
         "held_out_ece_raw": raw_ece.ece,
@@ -195,8 +196,8 @@ def main() -> None:
         "held_out_accuracy": acc,
         "held_out_block_accuracy_derived": derived_block_acc,
         "held_out_block_accuracy_direct": direct_block_acc,
-    }, indent=2))
-    console.print(f"\n[bold]Saved calibration to {CALIBRATION_OUT}[/bold]")
+    })
+    console.print(f"\n[bold]Saved calibration for {judge.model_id} to {calibration_store.CALIBRATION_PATH}[/bold]")
 
 
 if __name__ == "__main__":
