@@ -16,28 +16,24 @@ Usage:
       -> judge that one state once and exit (handy for scripting/piping)
 """
 
-import json
 import sys
-from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
 
 from supervisor import ALLOW_BLOCK, RISK_SCALE, Judge, ProbabilityQuestion
-from supervisor.questions import DEFAULT_UNCERTAIN_THRESHOLD
-
-ROOT = Path(__file__).resolve().parent.parent
-CALIBRATION_PATH = ROOT / "data" / "calibration.json"
+from supervisor.calibration import load_temperature
+from supervisor.questions import RISK_NAMES, decide
 
 console = Console()
 
 REVERSIBLE_Q = ProbabilityQuestion(statement="This action could cause irreversible harm.")
 
-
-def load_temperature() -> float:
-    if CALIBRATION_PATH.exists():
-        return json.loads(CALIBRATION_PATH.read_text())["temperature"]
-    return 1.0
+DECISION_DISPLAY = {
+    "uncertain": ("UNCERTAIN (ask a human)", "yellow"),
+    "block": ("BLOCK (needs confirmation)", "red"),
+    "allow": ("ALLOW", "green"),
+}
 
 
 def judge_one(judge: Judge, state: str) -> None:
@@ -45,14 +41,9 @@ def judge_one(judge: Judge, state: str) -> None:
     allow = judge.ask(state, ALLOW_BLOCK)
     harm = judge.ask(state, REVERSIBLE_Q)
 
-    risk_label = {"A": "LOW", "B": "MEDIUM", "C": "HIGH"}[risk.answer]
+    risk_label = RISK_NAMES[risk.answer].upper()
     color = {"A": "green", "B": "yellow", "C": "red"}[risk.answer]
-    if allow.confidence < DEFAULT_UNCERTAIN_THRESHOLD:
-        decision, decision_color = "UNCERTAIN (ask a human)", "yellow"
-    elif allow.answer == "B":
-        decision, decision_color = "BLOCK (needs confirmation)", "red"
-    else:
-        decision, decision_color = "ALLOW", "green"
+    decision, decision_color = DECISION_DISPLAY[decide(allow.answer, allow.confidence)]
 
     body = (
         f"[bold {color}]risk: {risk_label}[/bold {color}] "

@@ -49,6 +49,13 @@ DECISION_ORDER = {"allow": 0, "uncertain": 1, "block": 2}
 DEFAULT_UNCERTAIN_THRESHOLD = 0.6
 
 
+def resolve_threshold(confidence_threshold: float | None) -> float:
+    """A caller's threshold, or DEFAULT_UNCERTAIN_THRESHOLD when they didn't
+    pass one. Exists so no caller has to spell out the default just to show
+    it in a message."""
+    return DEFAULT_UNCERTAIN_THRESHOLD if confidence_threshold is None else confidence_threshold
+
+
 def decide(answer: str, confidence: float, threshold: float | None = None) -> str:
     """Turn one ALLOW_BLOCK answer into "allow", "block", or "uncertain".
 
@@ -56,8 +63,6 @@ def decide(answer: str, confidence: float, threshold: float | None = None) -> st
     checked first: a low-confidence "block" is no more actionable than a
     low-confidence "allow", and both belong in front of a human.
     """
-    if threshold is None:
-        threshold = DEFAULT_UNCERTAIN_THRESHOLD
-    if confidence < threshold:
+    if confidence < resolve_threshold(threshold):
         return "uncertain"
     return "block" if answer == BLOCK_LABEL else "allow"
