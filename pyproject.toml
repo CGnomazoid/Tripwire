@@ -9,11 +9,31 @@ authors = [
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "mcp[cli]>=2.2.0",
-    "mlx>=0.32.2",
-    "mlx-lm>=0.31.3",
     "numpy>=2.5.3",
     "pydantic>=2.13.5",
     "rich>=15.0.0",
+]
+
+[project.optional-dependencies]
+# Apple Silicon (macOS). Auto-selected by default on Darwin.
+mlx = [
+    "mlx>=0.32.2; sys_platform == 'darwin'",
+    "mlx-lm>=0.31.3; sys_platform == 'darwin'",
+]
+# CPU-only PyTorch, any platform - works but slow. Prefer `cuda` on Windows/
+# Linux with an Nvidia GPU.
+torch = [
+    "torch>=2.5.0",
+    "transformers>=4.46.0",
+    "accelerate>=1.0.0",
+]
+# PyTorch + CUDA + 4-bit quantization (bitsandbytes), for Windows/Linux with
+# an Nvidia GPU. Auto-selected by default on non-Darwin platforms.
+cuda = [
+    "torch>=2.5.0",
+    "transformers>=4.46.0",
+    "accelerate>=1.0.0",
+    "bitsandbytes>=0.44.0; sys_platform != 'darwin'",
 ]
 
 [project.scripts]
@@ -30,5 +50,5 @@ dev = [
 
 [tool.pytest.ini_options]
 markers = [
-    "slow: loads the judge model (MLX + Qwen2.5-7B weights) - first run downloads ~4.3GB. Run fast-only tests with -m 'not slow'.",
+    "slow: loads the judge model (Qwen2.5-7B weights, via whichever backend is active) - first run downloads several GB. Run fast-only tests with -m 'not slow'.",
 ]

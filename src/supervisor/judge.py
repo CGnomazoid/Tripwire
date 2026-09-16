@@ -1,13 +1,20 @@
-"""Core Judge: single-forward-pass typed-question answering over MLX."""
+"""Core Judge: single-forward-pass typed-question answering.
+
+Backend-agnostic - see supervisor/backends/ for the MLX (Apple Silicon) and
+PyTorch/CUDA (Nvidia, or CPU) implementations. Judge only ever calls one
+forward pass and reads logits off a handful of candidate answer tokens;
+which device that pass runs on is the backend's problem, not this class's.
+"""
 
 from __future__ import annotations
 
+import os
 import time
 from functools import lru_cache
 
-import mlx.core as mx
-from mlx_lm import load as mlx_load
+import numpy as np
 
+from supervisor.backends import DEFAULT_MODEL_IDS, load_backend, resolve_backend_name
 from supervisor.types import (
     ChoiceOption,
     ChoiceQuestion,
@@ -16,8 +23,6 @@ from supervisor.types import (
     Question,
     ScoreQuestion,
 )
-
-DEFAULT_MODEL = "mlx-community/Qwen2.5-7B-Instruct-4bit"
 
 SYSTEM_PROMPT = (
     "You are a fast, terse risk-assessment classifier embedded inline in an "
@@ -38,15 +43,26 @@ class LabelNotSingleTokenError(ValueError):
 
 
 class Judge:
-    """Loads one MLX model once, then answers typed questions against it in
-    a single forward pass each (no autoregressive generation)."""
+    """Loads one model once (via a pluggable backend), then answers typed
+    questions against it in a single forward pass each (no autoregressive
+    generation)."""
 
-    def __init__(self, model_id: str = DEFAULT_MODEL, temperature: float = 1.0):
-        self.model_id = model_id
+    def __init__(
+        self,
+        model_id: str | None = None,
+        temperature: float = 1.0,
+        backend: str | None = None,
+    ):
+        self.backend_name = resolve_backend_name(backend)
+        self.model_id = (
+            model_id or os.environ.get("SUPERVISOR_MODEL_ID") or DEFAULT_MODEL_IDS[self.backend_name]
+        )
         self.temperature = temperature
         t0 = time.time()
-        self.model, self.tokenizer = mlx_load(model_id)
+        self._backend = load_backend(self.backend_name, self.model_id)
         self.load_time_s = time.time() - t0
+        self.tokenizer = self._backend.tokenizer
+        self.model = self._backend.model
         self._label_token_cache: dict[str, int] = {}
 
     # -- label <-> single-token id plumbing -------------------------------
@@ -85,21 +101,15 @@ class Judge:
 
     # -- the actual forward pass --------------------------------------------
 
-    def _candidate_logits(self, prompt_text: str, candidate_ids: list[int]) -> mx.array:
-        tokens = self.tokenizer.encode(prompt_text)
-        input_ids = mx.array([tokens])
-        logits = self.model(input_ids)
-        last = logits[0, -1, :]
-        candidates = last[mx.array(candidate_ids)]
-        mx.eval(candidates)
-        return candidates
+    def _candidate_logits(self, prompt_text: str, candidate_ids: list[int]) -> list[float]:
+        return self._backend.candidate_logits(prompt_text, candidate_ids)
 
     @staticmethod
-    def _softmax_over_candidates(
-        candidate_logits: mx.array, temperature: float
-    ) -> list[float]:
-        scaled = candidate_logits / max(temperature, 1e-6)
-        probs = mx.softmax(scaled, axis=-1)
+    def _softmax_over_candidates(candidate_logits: list[float], temperature: float) -> list[float]:
+        scaled = np.asarray(candidate_logits, dtype=np.float64) / max(temperature, 1e-6)
+        scaled = scaled - scaled.max()  # numerical stability, doesn't change the result
+        exp = np.exp(scaled)
+        probs = exp / exp.sum()
         return [float(p) for p in probs]
 
     # -- public API -----------------------------------------------------------
@@ -127,7 +137,7 @@ class Judge:
                 kind="choice",
                 answer=labels[best_i],
                 confidence=cal[best_i],
-                raw_logits=dict(zip(labels, (float(x) for x in cand_logits.tolist()))),
+                raw_logits=dict(zip(labels, cand_logits)),
                 raw_probs=dict(zip(labels, raw)),
                 calibrated_probs=dict(zip(labels, cal)),
                 temperature=t,
@@ -156,7 +166,7 @@ class Judge:
                 answer=labels[best_i],
                 ordinal=best_i,
                 confidence=cal[best_i],
-                raw_logits=dict(zip(labels, (float(x) for x in cand_logits.tolist()))),
+                raw_logits=dict(zip(labels, cand_logits)),
                 raw_probs=dict(zip(labels, raw)),
                 calibrated_probs=dict(zip(labels, cal)),
                 temperature=t,
@@ -180,7 +190,7 @@ class Judge:
             answer = "true" if p_true_cal >= 0.5 else "false"
             confidence = p_true_cal if answer == "true" else 1 - p_true_cal
             latency_ms = (time.time() - t0) * 1000
-            logit_true, logit_false = (float(x) for x in cand_logits.tolist())
+            logit_true, logit_false = cand_logits
             return JudgeAnswer(
                 kind="probability",
                 answer=answer,
@@ -199,7 +209,7 @@ class Judge:
 
 
 @lru_cache(maxsize=4)
-def get_judge(model_id: str = DEFAULT_MODEL) -> Judge:
-    """Process-wide cached Judge instance per model_id, so a demo or server
-    doesn't reload weights on every call."""
-    return Judge(model_id=model_id)
+def get_judge(model_id: str | None = None, backend: str | None = None) -> Judge:
+    """Process-wide cached Judge instance per (model_id, backend), so a demo
+    or server doesn't reload weights on every call."""
+    return Judge(model_id=model_id, backend=backend)

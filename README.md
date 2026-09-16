@@ -33,17 +33,35 @@ Because the label options (`A`/`B`/`C`, `T`/`F`) are single tokens, the whole th
 
 ## 📦 Install
 
-Requires a Mac with Apple Silicon (this uses [MLX](https://github.com/ml-explore/mlx) for Metal-accelerated inference) and [`uv`](https://docs.astral.sh/uv/).
+Needs [`uv`](https://docs.astral.sh/uv/) and one of two inference backends, auto-selected by platform:
 
+| Platform | Backend | Extra |
+|---|---|---|
+| macOS, Apple Silicon | [MLX](https://github.com/ml-explore/mlx) (Metal) | `mlx` |
+| Windows / Linux + Nvidia GPU | PyTorch + [transformers](https://github.com/huggingface/transformers), 4-bit via bitsandbytes | `cuda` |
+| Anything else | PyTorch, CPU-only (works, just slow) | `torch` |
+
+**macOS:**
 ```bash
 git clone https://github.com/CGnomazoid/Tripwire.git
 cd Tripwire
 ./scripts/setup.sh
 ```
 
-First run downloads the judge model (`mlx-community/Qwen2.5-7B-Instruct-4bit`, ~4.3GB) from Hugging Face.
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/CGnomazoid/Tripwire.git
+cd Tripwire
+.\scripts\setup.ps1
+```
 
-> **Always use `./run` instead of calling `uv run` / `python` directly.** It's a one-line wrapper (`exec uv run --env-file .env "$@"`) that guarantees `PYTHONPATH` is set before the interpreter starts, and it's also the documented way to point an MCP client at the server.
+**Linux:** same as macOS, `./scripts/setup.sh` — it picks `cuda` automatically if `nvidia-smi` is found, otherwise CPU-only `torch`.
+
+Both setup scripts detect the right backend from the platform (and GPU presence) and run `uv sync --extra <name>` for you; set `SUPERVISOR_EXTRA` (`$env:SUPERVISOR_EXTRA` on Windows) to override the choice. First run downloads the judge model from Hugging Face — the MLX backend defaults to a pre-quantized 4-bit model (~4.3GB); the PyTorch backend downloads the full-precision checkpoint and quantizes it to 4-bit on load when bitsandbytes is available.
+
+> **Always use `./run` (`.\run.ps1` on Windows) instead of calling `uv run` / `python` directly.** It's a one-line wrapper that guarantees `PYTHONPATH` is set before the interpreter starts, and it's also the documented way to point an MCP client at the server.
+
+The CUDA backend is implemented against the same single-forward-pass contract as MLX and follows transformers' documented quantized-loading API, but hasn't been exercised on real Nvidia hardware as part of this project (the reference machine is Apple Silicon) — if you try it, [open an issue](https://github.com/CGnomazoid/Tripwire/issues) with what did or didn't work.
 
 ## 🚀 Try it
 
@@ -64,6 +82,22 @@ First run downloads the judge model (`mlx-community/Qwen2.5-7B-Instruct-4bit`, ~
 ```
 
 `scripts/try_it.py` never calls `exec`/`eval`/`subprocess`/`os.system` on your input — whatever you type is only ever fed to the model as text. No matter how dangerous it reads, nothing runs.
+
+### Choosing a backend / model explicitly
+
+`Judge()` auto-picks a backend by platform (MLX on macOS, PyTorch elsewhere) and a matching default model. To override:
+
+```python
+from supervisor import Judge
+
+judge = Judge(backend="torch", model_id="Qwen/Qwen2.5-7B-Instruct")
+```
+
+Or without touching code, via environment variables (also picked up by `try_it.py`, the eval scripts, and the MCP server):
+
+```bash
+SUPERVISOR_BACKEND=torch SUPERVISOR_MODEL_ID=Qwen/Qwen2.5-7B-Instruct ./run python scripts/try_it.py
+```
 
 ## 🔌 Use it as an MCP server
 

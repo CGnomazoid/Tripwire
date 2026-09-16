@@ -14,14 +14,12 @@ Judge.ask() or the model's prompt - the risk score is a pure function of
 `state` alone. `reason` is only logged (audit_log.py) and echoed back in the
 response, for two purposes: troubleshooting later, and giving a human who
 sees a blocked action some context on what the agent thought it was doing.
-Keeping this split (logged/displayed, but never scored) matters - see the
-readme's Status section for why folding it into the score would reopen a
-way for an agent to talk its way past the gate.
+Keeping this split (logged/displayed, but never scored) matters - folding it
+into the score would reopen a way for an agent to talk its way past the gate.
 
 Run directly:      ./run python -m supervisor.mcp_server
 As an MCP client config entry, point `command` at the repo's `run` script
-(sidesteps the uv/.pth gotcha documented in readme.md) with args
-["python", "-m", "supervisor.mcp_server"].
+(`run.ps1` on Windows) with args ["python", "-m", "supervisor.mcp_server"].
 """
 
 import json
