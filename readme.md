@@ -92,13 +92,19 @@ Steps 1-5 of the build order are done and working end to end. Numbers below are 
 - Eval set is hand-authored by Claude, not reviewed by a human yet - the `borderline` category especially deserves a sanity check from Colin on whether the assigned ground-truth labels are actually the risk level he'd want.
 - No pip-packaging/CLI polish yet (def-of-done item 1 - "pip-installable" - the package structure is there but nothing's been published or given a CLI entry point).
 
-**Known environment gotcha (macOS + uv + recent CPython, hit and fixed this session):** recent CPython point releases (confirmed on 3.13.12 and 3.14.3) patched `site.py` to silently skip any `.pth` file with the macOS "hidden" (`UF_HIDDEN`) flag set - this is a security fix, not a bug, but it collides with `uv`, which sets that flag on the editable-install `.pth` file it writes on every `uv sync`/`uv add`. Net effect: `import supervisor` can silently break (no error at all, `site.py` just drops the `src/` path) after any dependency change, on any Python 3.13.12+/3.14+. Fix: `scripts/setup.sh` runs `uv sync` and then clears the flag with `chflags nohidden`. If imports break again after adding a dependency, that's almost certainly this - rerun `scripts/setup.sh`.
+**Known environment gotcha (macOS + iCloud Drive + uv + recent CPython):** recent CPython point releases (confirmed on 3.13.12 and 3.14.3) patched `site.py` to silently skip any `.pth` file with the macOS "hidden" (`UF_HIDDEN`) flag set - a security fix, not a bug, but it collides with `uv`, which sets that flag on the editable-install `.pth` file it writes for this project. Initially this only seemed to happen after `uv sync`/`uv add`, but it turned out to reapply unpredictably on plain `uv run` too (this repo lives under `~/Library/Mobile Documents/com~apple~CloudDocs`, i.e. iCloud Drive - possibly related). Net effect: `import supervisor` can silently break with zero error output, at any time.
+
+The durable fix: **use `./run` instead of `uv run` directly** everywhere below. `./run` is a one-line wrapper that passes `--env-file .env`, setting `PYTHONPATH=src` - the interpreter applies `PYTHONPATH` before `site.py`'s `.pth` scanning ever runs, so it's immune to whatever is flipping that flag. `scripts/setup.sh` still exists and clears the flag too, but `./run` is the actual fix; the flag-clear alone kept silently regressing.
 
 **How to run things:**
 ```bash
-./scripts/setup.sh              # one-time / after any dependency change
-uv run python scripts/run_spike.py   # ~20s, proves the mechanism
-uv run python scripts/run_eval.py    # ~30s, calibration + honest accuracy/ECE report
-uv run python demo/agent_demo.py     # the live gating demo
-uv run pytest -q                     # fast unit tests, no model load
+./scripts/setup.sh          # one-time / after any dependency change
+./run python scripts/run_spike.py   # ~20s, proves the mechanism
+./run python scripts/run_eval.py    # ~30s, calibration + honest accuracy/ECE report
+./run python demo/agent_demo.py     # the live gating demo (actually executes benign calls)
+./run python scripts/try_it.py      # interactive judge-only playground, see below - never executes anything
+./run pytest -q                     # fast unit tests, no model load
+./run pytest tests/test_judge.py -v # judge integration tests (loads the model)
 ```
+
+**`scripts/try_it.py`** - type or pipe in any tool-call description, including intentionally dangerous ones, and see how the judge scores it (risk scale, allow/block, P(irreversible harm)). It is read-only by construction: your input is only ever passed as the `state` string to `Judge.ask()` (tokenized and fed through the model as text) - there is no `exec`/`eval`/`subprocess`/`os.system` anywhere near it, so nothing you type can actually run, no matter how it reads. Single-shot mode: `./run python scripts/try_it.py "Tool call: run_shell(cmd='rm -rf /')"`.
