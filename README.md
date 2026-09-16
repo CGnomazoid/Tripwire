@@ -43,7 +43,7 @@ cd Tripwire
 
 First run downloads the judge model (`mlx-community/Qwen2.5-7B-Instruct-4bit`, ~4.3GB) from Hugging Face.
 
-> **Always use `./run` instead of calling `uv run` / `python` directly.** It's a one-line wrapper (`exec uv run --env-file .env "$@"`) that works around a real environment gotcha — see [Known gotchas](#-known-gotchas) below — and it's also the documented way to point an MCP client at the server.
+> **Always use `./run` instead of calling `uv run` / `python` directly.** It's a one-line wrapper (`exec uv run --env-file .env "$@"`) that guarantees `PYTHONPATH` is set before the interpreter starts, and it's also the documented way to point an MCP client at the server.
 
 ## 🚀 Try it
 
@@ -134,10 +134,6 @@ data/                  generated eval/calibration datasets + fitted calibration.
 ```
 
 Every test that touches the model also hashes the whole repo tree before and after running — including deliberately destructive-sounding inputs like `rm -rf /` — to prove nothing actually executed.
-
-## 🐛 Known gotchas
-
-**macOS + iCloud Drive + `uv` + recent CPython:** recent CPython point releases patched `site.py` to silently skip any `.pth` file with the macOS "hidden" (`UF_HIDDEN`) flag set — a deliberate security fix, but it collides with `uv`, which sets that flag on the editable-install `.pth` file it writes for this project. If your checkout lives somewhere iCloud Drive (or similar) syncs and touches file flags, `import supervisor` can silently break with zero error output. `./run` sidesteps this entirely by passing `PYTHONPATH` before `site.py`'s `.pth` scanning ever runs — use it instead of bare `uv run` / `python`.
 
 ## 📄 License
 
