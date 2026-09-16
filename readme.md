@@ -83,7 +83,9 @@ Steps 1-5 of the build order are done and working end to end. Numbers below are 
 - `scripts/run_spike.py` - step 1, raw mechanism sanity check.
 - `scripts/run_eval.py` - steps 3+6, fits calibration and reports accuracy/ECE/reliability tables on a held-out split; writes `data/calibration.json`.
 - `demo/agent_demo.py` - step 5, a toy scripted agent loop that actually executes benign tool calls into `demo/sandbox/` and blocks the risky ones (an unverified $500k transfer, a recursive delete) before they run, using the fitted calibration.
-- `tests/` - fast pure-math unit tests for the calibration layer and pydantic validators (no model load needed).
+- `scripts/try_it.py` - interactive judge-only playground, see below.
+- `src/supervisor/mcp_server.py` - exposes the judge as an MCP server (`assess_risk`, `should_block`, `judge_statement`, `ask_custom_choice` tools) so any MCP-compatible agent/client can call it before acting. Deliberately opt-in plumbing, not a hook/interceptor - nothing calls these tools automatically, a caller has to choose to. Chose this over a Claude Code `PreToolUse` hook specifically because a hook would auto-gate live tool calls with an imperfect judge (weakest eval category, `fs_delete`, is exactly the kind of action a hook would see most) - MCP exposure carries none of that risk and is less product-specific besides.
+- `tests/` - fast pure-math unit tests for the calibration layer and pydantic validators, integration tests against the real model (`test_judge.py`), and end-to-end tests of the MCP server over the real stdio protocol (`test_mcp_server.py`) - all model-touching tests are marked `slow` and double as safety checks (byte-identical repo hash before/after judging deliberately destructive inputs).
 
 **Not done yet (steps 4, 7, and general hardening):**
 - No real speed/quantization pass beyond "already 4-bit via mlx-community." Haven't tried int8 vs 4-bit tradeoffs or a smaller model.
@@ -103,8 +105,11 @@ The durable fix: **use `./run` instead of `uv run` directly** everywhere below. 
 ./run python scripts/run_eval.py    # ~30s, calibration + honest accuracy/ECE report
 ./run python demo/agent_demo.py     # the live gating demo (actually executes benign calls)
 ./run python scripts/try_it.py      # interactive judge-only playground, see below - never executes anything
+./run python -m supervisor.mcp_server  # MCP server over stdio, see below
 ./run pytest -q                     # fast unit tests, no model load
-./run pytest tests/test_judge.py -v # judge integration tests (loads the model)
+./run pytest -m slow -v              # everything that loads the model: judge + MCP server integration tests
 ```
 
 **`scripts/try_it.py`** - type or pipe in any tool-call description, including intentionally dangerous ones, and see how the judge scores it (risk scale, allow/block, P(irreversible harm)). It is read-only by construction: your input is only ever passed as the `state` string to `Judge.ask()` (tokenized and fed through the model as text) - there is no `exec`/`eval`/`subprocess`/`os.system` anywhere near it, so nothing you type can actually run, no matter how it reads. Single-shot mode: `./run python scripts/try_it.py "Tool call: run_shell(cmd='rm -rf /')"`.
+
+**MCP server** - to point an MCP client (Claude Desktop, Claude Code, etc.) at it, add a server entry with `command` set to this repo's `run` script (absolute path) and `args: ["python", "-m", "supervisor.mcp_server"]`. Using `./run` as the command (not a bare `python`/`uv`) matters: MCP's stdio client only forwards a small env allowlist to spawned servers (`PATH`, `HOME`, etc, not `PYTHONPATH`) as a deliberate security default, so `run`'s internal `PYTHONPATH` fix is what keeps the import working regardless of the `.pth` gotcha's mood that day. Same read-only guarantee as `try_it.py` - the four tools only ever judge the text they're given.
