@@ -29,6 +29,7 @@ from mcp.server.mcpserver import MCPServer
 
 from supervisor.audit_log import log_call
 from supervisor.judge import Judge
+from supervisor.multiline import assess_shell_command as _assess_shell_command
 from supervisor.questions import ALLOW_BLOCK, RISK_SCALE
 from supervisor.types import ChoiceOption, ChoiceQuestion, ProbabilityQuestion
 
@@ -70,7 +71,11 @@ mcp = MCPServer(
         "do with the judgment. Pass `reason` (why you want to do this) on "
         "every call if you can - it doesn't change the score, but it's "
         "logged and shown to the human if the action gets blocked, so they "
-        "have context instead of just a bare denial."
+        "have context instead of just a bare denial. For a shell command "
+        "that chains multiple statements (&&, ||, ;, or multiple lines), "
+        "use assess_shell_command instead of assess_risk/should_block - it "
+        "judges each statement individually so one risky line can't hide "
+        "among a lot of benign ones."
     ),
 )
 
@@ -181,6 +186,39 @@ def ask_custom_choice(
         "reason": reason,
     }
     log_call(tool="ask_custom_choice", state=state, reason=reason, result=response)
+    return response
+
+
+@mcp.tool(structured_output=True)
+def assess_shell_command(cmd: str, reason: str | None = None) -> dict[str, str | int | list | None]:
+    """Judge a shell command that may chain multiple statements together
+    (via &&, ||, ; or newlines). Splits it into individual commands and
+    judges each one on its own before aggregating, instead of judging the
+    whole string as one opaque blob - this catches a single dangerous line
+    buried among many benign ones, which a single combined judgment can
+    dilute past detection, and keeps each forward pass short regardless of
+    how long the overall command is. Does NOT split on | (pipe): a
+    pipeline's danger often comes from the composition itself (e.g.
+    `curl ... | sh`), so piped stages are judged together as one command.
+
+    Prefer this over assess_risk/should_block whenever `cmd` might contain
+    more than one statement - a long or chained command is exactly the case
+    a single judgment call is least reliable on.
+
+    Args:
+        cmd: the shell command (or chain of commands) about to run.
+        reason: optional - why you (the calling agent) believe this action
+            is needed. Does not affect the score. Logged and echoed back.
+    """
+    result = _assess_shell_command(_get_judge(), cmd)
+    response = {
+        "risk": result["risk"],
+        "decision": result["decision"],
+        "num_commands": result["num_commands"],
+        "commands": result["commands"],
+        "reason": reason,
+    }
+    log_call(tool="assess_shell_command", state=cmd, reason=reason, result=response)
     return response
 
 

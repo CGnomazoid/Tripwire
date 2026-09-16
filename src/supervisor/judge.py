@@ -15,6 +15,7 @@ from functools import lru_cache
 import numpy as np
 
 from supervisor.backends import DEFAULT_MODEL_IDS, load_backend, resolve_backend_name
+from supervisor.sanitize import strip_comments
 from supervisor.types import (
     ChoiceOption,
     ChoiceQuestion,
@@ -115,6 +116,11 @@ class Judge:
     # -- public API -----------------------------------------------------------
 
     def ask(self, state: str, question: Question, temperature: float | None = None) -> JudgeAnswer:
+        # Strip # and // comments before anything else sees this text - see
+        # sanitize.py for why. JudgeAnswer.state reflects what was actually
+        # judged, not the raw input; callers that need the raw text (e.g.
+        # audit logging) should hold onto their own copy of it.
+        state = strip_comments(state)
         t = self.temperature if temperature is None else temperature
         t0 = time.time()
 
