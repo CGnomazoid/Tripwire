@@ -49,3 +49,52 @@ def test_ece_handles_empty_bins():
     result = expected_calibration_error(confidences, correct, n_bins=10)
     assert result.ece >= 0.0
     assert len(result.bin_count) == 10
+
+
+# -- numerical stability under extreme/degenerate inputs. In practice the
+# real model produces logit gaps well beyond +-10 (see test_judge.py's
+# temperature test, and the 1000+ token vocab logits mlx-lm returns), so
+# fit_temperature has to stay finite well past what a toy example suggests
+# is "extreme." Verified against the actual live functions before writing
+# these bounds - see the exploratory probe referenced in the commit this
+# test was added in. --------------------------------------------------------
+
+def test_fit_temperature_stays_finite_on_extreme_confident_correct_logits():
+    # logit gap of 2000 - larger than anything realistic, specifically to
+    # probe for overflow in the softmax/exp math.
+    examples = [CalibrationExample(logits=[1000.0, -1000.0], correct_index=0)]
+    t = fit_temperature(examples)
+    assert math.isfinite(t)
+    assert t > 0
+
+
+def test_fit_temperature_stays_finite_on_extreme_confident_wrong_logits():
+    # same extreme gap, but the confident answer is the WRONG one - this is
+    # the case that stresses the optimizer hardest, since cooling toward
+    # uniform is the only way to reduce NLL and it should hit the upper
+    # bound of the search range rather than diverging.
+    examples = [CalibrationExample(logits=[1000.0, -1000.0], correct_index=1)]
+    t = fit_temperature(examples)
+    assert math.isfinite(t)
+    assert t > 5.0  # should push toward the top of the search range (t_max=8.0)
+
+
+def test_fit_temperature_handles_all_tied_logits():
+    # zero information (every candidate equally likely) shouldn't crash or
+    # produce a degenerate temperature.
+    examples = [CalibrationExample(logits=[0.0, 0.0, 0.0], correct_index=0) for _ in range(5)]
+    t = fit_temperature(examples)
+    assert math.isfinite(t)
+    assert t > 0
+
+
+def test_fit_temperature_single_example_does_not_crash():
+    t = fit_temperature([CalibrationExample(logits=[1.0, 2.0], correct_index=0)])
+    assert math.isfinite(t)
+    assert t > 0
+
+
+def test_ece_handles_boundary_confidences_of_exactly_zero_and_one():
+    result = expected_calibration_error([0.0, 1.0], [False, True])
+    assert math.isfinite(result.ece)
+    assert math.isclose(result.ece, 0.0, abs_tol=1e-9)

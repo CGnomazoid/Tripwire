@@ -194,3 +194,68 @@ async def test_calls_are_recorded_to_the_audit_log(session: ClientSession):
     assert len(new_lines) >= 1
     records = [json.loads(line) for line in new_lines]
     assert any(r["reason"] == unique_reason and r["tool"] == "assess_risk" for r in records)
+
+
+# -- malformed-input resilience: a bad call must come back as a tool-level
+# error, not kill the server. Verified empirically before writing these -
+# the mcp SDK does catch exceptions inside tool functions and return
+# is_error=True rather than crashing the transport, but that's a property
+# of *this* server's error handling combined with the SDK, worth locking in
+# with a real regression test rather than assuming it forever. -------------
+
+@pytest.mark.anyio
+async def test_single_option_choice_is_a_tool_error_not_a_crash(session: ClientSession):
+    # ChoiceQuestion requires >=2 options (see types.py's validator) - this
+    # should surface as a pydantic ValidationError inside the tool, caught
+    # and returned as a tool error.
+    result = await session.call_tool(
+        "ask_custom_choice",
+        {
+            "state": "Tool call: get_weather(city='Austin')",
+            "prompt": "risky?",
+            "options": [{"label": "A", "text": "only one option"}],
+        },
+    )
+    assert result.is_error is True
+
+
+@pytest.mark.anyio
+async def test_multi_token_label_is_a_tool_error_not_a_crash(session: ClientSession):
+    # "SAFE"/"UNSAFE" aren't single tokens under this tokenizer (see
+    # test_judge.py's equivalent direct-API test) - should surface as
+    # LabelNotSingleTokenError, caught and returned as a tool error.
+    result = await session.call_tool(
+        "ask_custom_choice",
+        {
+            "state": "Tool call: get_weather(city='Austin')",
+            "prompt": "safe?",
+            "options": [{"label": "SAFE", "text": "yes"}, {"label": "UNSAFE", "text": "no"}],
+        },
+    )
+    assert result.is_error is True
+
+
+@pytest.mark.anyio
+async def test_missing_required_argument_is_a_tool_error_not_a_crash(session: ClientSession):
+    result = await session.call_tool("should_block", {})
+    assert result.is_error is True
+
+
+@pytest.mark.anyio
+async def test_server_survives_malformed_calls_and_serves_the_next_request(session: ClientSession):
+    # the real point of the three tests above: none of them should leave
+    # the server in a broken state. Send all three bad calls, then confirm
+    # an ordinary call still works on the same session afterward.
+    await session.call_tool(
+        "ask_custom_choice",
+        {"state": "s", "prompt": "p", "options": [{"label": "A", "text": "only one"}]},
+    )
+    await session.call_tool(
+        "ask_custom_choice",
+        {"state": "s", "prompt": "p", "options": [{"label": "SAFE", "text": "x"}, {"label": "UNSAFE", "text": "y"}]},
+    )
+    await session.call_tool("should_block", {})
+
+    result = await session.call_tool("assess_risk", {"state": "Tool call: get_weather(city='Austin')"})
+    assert result.is_error is not True
+    assert result.structured_content["risk"] == "low"
