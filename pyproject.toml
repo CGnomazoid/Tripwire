@@ -1,7 +1,7 @@
 [project]
 name = "supervisor"
 version = "0.1.0"
-description = "Add your description here"
+description = "A fast, local, non-generative judge model that gates risky AI agent tool calls."
 readme = "README.md"
 authors = [
     { name = "Colin Ulmer", email = "89170268+CGnomazoid@users.noreply.github.com" }
