@@ -21,3 +21,19 @@ ALLOW_BLOCK = ChoiceQuestion(
 )
 
 RISK_LABEL_TO_ORDINAL = {"A": 0, "B": 1, "C": 2}
+
+# Below this confidence, should_block()/assess_shell_command() report
+# "uncertain" instead of forcing a binary allow/block. Temperature scaling
+# can soften an overconfident wrong answer, but it can't move a genuinely
+# near-50/50 one past the decision boundary (see README's Known
+# limitations - the `cd Desktop` case lands ~55% confidence even after
+# calibration) - forcing a binary call there is presenting a coin flip as a
+# decision. 0.6 is the threshold the adversarial test suite's emoji/casual-
+# framing case (57.8% confidence) was chosen against - anything below it
+# gets routed to a human rather than silently allowed or blocked.
+#
+# This is a plain module constant today, not a setting, but it's meant to
+# become one: a per-caller override (see should_block's confidence_threshold
+# parameter) is the seam a future "how cautious do you want this" user
+# preference - e.g. a confidence slider - would hang off of.
+DEFAULT_UNCERTAIN_THRESHOLD = 0.6

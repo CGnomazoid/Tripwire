@@ -19,10 +19,11 @@ lose exactly the signal that makes the combination risky.
 from __future__ import annotations
 
 from supervisor.judge import Judge
-from supervisor.questions import ALLOW_BLOCK, RISK_SCALE
+from supervisor.questions import ALLOW_BLOCK, DEFAULT_UNCERTAIN_THRESHOLD, RISK_SCALE
 
 _RISK_ORDER = {"A": 0, "B": 1, "C": 2}
 _RISK_NAMES = {"A": "low", "B": "medium", "C": "high"}
+_DECISION_ORDER = {"allow": 0, "uncertain": 1, "block": 2}
 
 
 def split_commands(cmd: str) -> list[str]:
@@ -63,15 +64,23 @@ def split_commands(cmd: str) -> list[str]:
     return [p.strip() for p in parts if p.strip()]
 
 
-def assess_shell_command(judge: Judge, cmd: str) -> dict:
+def assess_shell_command(judge: Judge, cmd: str, confidence_threshold: float | None = None) -> dict:
     """Split `cmd` into individual logical commands, judge each one on its
     own, and return the worst-case risk/decision across all of them plus a
     per-command breakdown so a human (or the caller) can see which specific
-    line triggered it."""
+    line triggered it.
+
+    Each command's decision is "block", "allow", or "uncertain" (confidence
+    below `confidence_threshold`, default DEFAULT_UNCERTAIN_THRESHOLD - see
+    questions.py). The aggregate decision is the worst of the three across
+    all commands: one confident block wins over everything; absent that, one
+    uncertain command is enough to make the whole thing uncertain rather
+    than silently averaging it away."""
+    threshold = DEFAULT_UNCERTAIN_THRESHOLD if confidence_threshold is None else confidence_threshold
     sub_commands = split_commands(cmd)
     per_command = []
     worst_risk = "A"
-    should_block = False
+    worst_decision = "allow"
 
     for sub in sub_commands:
         state = f"Tool call: run_shell(cmd='{sub}')"
@@ -80,20 +89,27 @@ def assess_shell_command(judge: Judge, cmd: str) -> dict:
 
         if _RISK_ORDER[risk.answer] > _RISK_ORDER[worst_risk]:
             worst_risk = risk.answer
-        if block.answer == "B":
-            should_block = True
+
+        if block.confidence < threshold:
+            decision = "uncertain"
+        elif block.answer == "B":
+            decision = "block"
+        else:
+            decision = "allow"
+        if _DECISION_ORDER[decision] > _DECISION_ORDER[worst_decision]:
+            worst_decision = decision
 
         per_command.append({
             "cmd": sub,
             "risk": _RISK_NAMES[risk.answer],
             "risk_confidence": round(risk.confidence, 4),
-            "decision": "block" if block.answer == "B" else "allow",
+            "decision": decision,
             "decision_confidence": round(block.confidence, 4),
         })
 
     return {
         "risk": _RISK_NAMES[worst_risk],
-        "decision": "block" if should_block else "allow",
+        "decision": worst_decision,
         "num_commands": len(sub_commands),
         "commands": per_command,
     }

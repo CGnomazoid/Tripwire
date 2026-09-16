@@ -30,7 +30,7 @@ from mcp.server.mcpserver import MCPServer
 from supervisor.audit_log import log_call
 from supervisor.judge import Judge
 from supervisor.multiline import assess_shell_command as _assess_shell_command
-from supervisor.questions import ALLOW_BLOCK, RISK_SCALE
+from supervisor.questions import ALLOW_BLOCK, DEFAULT_UNCERTAIN_THRESHOLD, RISK_SCALE
 from supervisor.types import ChoiceOption, ChoiceQuestion, ProbabilityQuestion
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -104,21 +104,45 @@ def assess_risk(state: str, reason: str | None = None) -> dict[str, str | float 
 
 
 @mcp.tool(structured_output=True)
-def should_block(state: str, reason: str | None = None) -> dict[str, str | float | None]:
+def should_block(
+    state: str, reason: str | None = None, confidence_threshold: float | None = None
+) -> dict[str, str | float | None]:
     """Decide whether a proposed tool call should be blocked pending human
-    confirmation, or is fine to run automatically.
+    confirmation, is fine to run automatically, or is uncertain enough that
+    a human should weigh in even though the raw answer wasn't "block".
 
     Args:
         state: plain-text description of the tool call about to be made.
         reason: optional - why you (the calling agent) believe this action
             is needed. Does not affect the decision. Logged and echoed back
-            so a human can see it if this gets blocked.
+            so a human can see it if this gets blocked or is uncertain.
+        confidence_threshold: below this confidence, the decision is
+            "uncertain" rather than a forced allow/block (default 0.6 - see
+            supervisor.questions.DEFAULT_UNCERTAIN_THRESHOLD). Temperature
+            calibration can soften an overconfident wrong answer, but it
+            can't move a genuinely near-50/50 one past the decision line -
+            forcing a binary call there would present a coin flip as a
+            decision.
     """
+    threshold = DEFAULT_UNCERTAIN_THRESHOLD if confidence_threshold is None else confidence_threshold
     result = _get_judge().ask(state, ALLOW_BLOCK)
-    decision = "block" if result.answer == "B" else "allow"
 
-    message = f"{decision.capitalize()} (confidence {result.confidence:.0%})."
-    if decision == "block" and reason:
+    if result.confidence < threshold:
+        decision = "uncertain"
+    elif result.answer == "B":
+        decision = "block"
+    else:
+        decision = "allow"
+
+    if decision == "uncertain":
+        message = (
+            f"Uncertain (confidence {result.confidence:.0%}, below the "
+            f"{threshold:.0%} threshold) - recommend asking a human rather "
+            f"than deciding automatically."
+        )
+    else:
+        message = f"{decision.capitalize()} (confidence {result.confidence:.0%})."
+    if decision in ("block", "uncertain") and reason:
         message += f" Agent's stated reason: {reason!r}"
 
     response = {
@@ -190,7 +214,9 @@ def ask_custom_choice(
 
 
 @mcp.tool(structured_output=True)
-def assess_shell_command(cmd: str, reason: str | None = None) -> dict[str, str | int | list | None]:
+def assess_shell_command(
+    cmd: str, reason: str | None = None, confidence_threshold: float | None = None
+) -> dict[str, str | int | list | None]:
     """Judge a shell command that may chain multiple statements together
     (via &&, ||, ; or newlines). Splits it into individual commands and
     judges each one on its own before aggregating, instead of judging the
@@ -205,12 +231,19 @@ def assess_shell_command(cmd: str, reason: str | None = None) -> dict[str, str |
     more than one statement - a long or chained command is exactly the case
     a single judgment call is least reliable on.
 
+    The overall `decision` (and each command's own decision) can be
+    "uncertain" rather than a forced allow/block - see should_block's
+    confidence_threshold for what that means. One confident block beats
+    everything else; failing that, one uncertain command makes the whole
+    result uncertain.
+
     Args:
         cmd: the shell command (or chain of commands) about to run.
         reason: optional - why you (the calling agent) believe this action
             is needed. Does not affect the score. Logged and echoed back.
+        confidence_threshold: see should_block (default 0.6).
     """
-    result = _assess_shell_command(_get_judge(), cmd)
+    result = _assess_shell_command(_get_judge(), cmd, confidence_threshold=confidence_threshold)
     response = {
         "risk": result["risk"],
         "decision": result["decision"],

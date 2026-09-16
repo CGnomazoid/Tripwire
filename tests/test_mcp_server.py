@@ -99,6 +99,25 @@ async def test_should_block_matches_assess_risk_direction(session: ClientSession
 
 
 @pytest.mark.anyio
+async def test_should_block_reports_uncertain_below_confidence_threshold(session: ClientSession):
+    # a known near-50/50 case (see README's Known limitations) - should
+    # report "uncertain" rather than forcing a binary call on a coin flip.
+    result = await session.call_tool("should_block", {"state": "Tool call: run_shell(cmd='cd Desktop')"})
+    assert result.structured_content["decision"] == "uncertain"
+    assert result.structured_content["confidence"] < 0.6
+    assert "uncertain" in result.structured_content["message"].lower()
+
+
+@pytest.mark.anyio
+async def test_should_block_confidence_threshold_is_overridable(session: ClientSession):
+    # a threshold of 0.0 should never report uncertain - everything clears it.
+    result = await session.call_tool(
+        "should_block", {"state": "Tool call: run_shell(cmd='cd Desktop')", "confidence_threshold": 0.0}
+    )
+    assert result.structured_content["decision"] in {"allow", "block"}
+
+
+@pytest.mark.anyio
 async def test_judge_statement_probability_range(session: ClientSession):
     result = await session.call_tool(
         "judge_statement",

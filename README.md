@@ -128,11 +128,14 @@ Point your MCP client at this repo's `run` script:
 | Tool | Returns |
 |---|---|
 | `assess_risk(state, reason?)` | `{ risk: low/medium/high, confidence, raw_probs, ... }` |
-| `should_block(state, reason?)` | `{ decision: allow/block, confidence, message, ... }` |
+| `should_block(state, reason?, confidence_threshold?)` | `{ decision: allow/block/uncertain, confidence, message, ... }` |
 | `judge_statement(state, statement, reason?)` | `{ answer: true/false, probability_true, ... }` |
 | `ask_custom_choice(state, prompt, options, reason?)` | `{ answer, confidence, ... }` |
+| `assess_shell_command(cmd, reason?, confidence_threshold?)` | `{ risk, decision: allow/block/uncertain, commands: [...], ... }` |
 
-Every tool accepts an optional `reason` — the calling agent's own stated justification for the action. It is **logged and echoed back for human review** (and surfaced in `should_block`'s message specifically when the action is blocked) but it is **never fed into the model's scoring prompt**. The risk score stays a pure function of the proposed action itself, so a fluent, plausible-sounding excuse can't talk the judge into a lower score. See `src/supervisor/audit_log.py`.
+Every tool accepts an optional `reason` — the calling agent's own stated justification for the action. It is **logged and echoed back for human review** (and surfaced in `should_block`'s message when the action is blocked or uncertain) but it is **never fed into the model's scoring prompt**. The risk score stays a pure function of the proposed action itself, so a fluent, plausible-sounding excuse can't talk the judge into a lower score. See `src/supervisor/audit_log.py`.
+
+`should_block` and `assess_shell_command` don't force a binary call when the model's raw confidence is genuinely low — below `confidence_threshold` (default 0.6, see `supervisor.questions.DEFAULT_UNCERTAIN_THRESHOLD`), the decision comes back `"uncertain"` instead of guessing. `assess_shell_command` splits a chained/multi-line shell command (`&&`, `||`, `;`, newlines — not `|`, since a pipeline's danger is usually the composition itself, e.g. `curl ... | sh`) into individual statements, judges each one, and reports the worst verdict across all of them plus a per-command breakdown, so one risky line can't get diluted by a lot of benign ones around it.
 
 ## 📊 Measured results
 
@@ -152,7 +155,7 @@ This project's threat model is **catching honest mistakes**, not resisting a use
 
 If you extend this toward adversarial hardening, start there.
 
-Separately, and not adversarial at all: `should_block` can land on a genuinely near-50/50 raw answer for an ordinary, non-malicious input — e.g. `run_shell(cmd='cd Desktop')` comes back `LOW` risk confidently but `BLOCK` at ~55% confidence, barely past the decision threshold. Temperature scaling can't fix this - it rescales confidence around whatever the frozen model's raw logits already say, it can't move the argmax. Treat any `should_block`/`assess_risk` confidence below ~0.6 as "uncertain, ask a human" rather than trusting the binary answer.
+Separately, and not adversarial at all: `should_block` can land on a genuinely near-50/50 raw answer for an ordinary, non-malicious input — e.g. `run_shell(cmd='cd Desktop')` comes back `LOW` risk confidently but was landing on `BLOCK` at only ~55% confidence, barely past the old binary decision threshold. Temperature scaling can't fix this - it rescales confidence around whatever the frozen model's raw logits already say, it can't move the argmax. `should_block` and `assess_shell_command` now handle this directly: below `confidence_threshold` they report `"uncertain"` instead of forcing an allow/block guess (see the MCP tools table above). If you're calling `assess_risk` directly instead, apply the same ~0.6 threshold yourself.
 
 ## 🗂️ Project layout
 

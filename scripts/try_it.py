@@ -24,6 +24,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from supervisor import ALLOW_BLOCK, RISK_SCALE, Judge, ProbabilityQuestion
+from supervisor.questions import DEFAULT_UNCERTAIN_THRESHOLD
 
 ROOT = Path(__file__).resolve().parent.parent
 CALIBRATION_PATH = ROOT / "data" / "calibration.json"
@@ -46,8 +47,12 @@ def judge_one(judge: Judge, state: str) -> None:
 
     risk_label = {"A": "LOW", "B": "MEDIUM", "C": "HIGH"}[risk.answer]
     color = {"A": "green", "B": "yellow", "C": "red"}[risk.answer]
-    decision = "BLOCK (needs confirmation)" if allow.answer == "B" else "ALLOW"
-    decision_color = "red" if allow.answer == "B" else "green"
+    if allow.confidence < DEFAULT_UNCERTAIN_THRESHOLD:
+        decision, decision_color = "UNCERTAIN (ask a human)", "yellow"
+    elif allow.answer == "B":
+        decision, decision_color = "BLOCK (needs confirmation)", "red"
+    else:
+        decision, decision_color = "ALLOW", "green"
 
     body = (
         f"[bold {color}]risk: {risk_label}[/bold {color}] "
