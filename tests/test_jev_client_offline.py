@@ -2,6 +2,7 @@
 call. Stubs urllib.request.urlopen so these run in milliseconds."""
 
 import io
+import os
 import urllib.error
 
 import pytest
@@ -76,6 +77,31 @@ def test_does_not_retry_a_4xx(monkeypatch):
     with pytest.raises(jev_client.TypesafeAPIError):
         jev_client.system_one("state", {}, api_key="k")
     assert attempts["n"] == 1
+
+
+def test_dotenv_sets_a_var_thats_not_already_set(tmp_path, monkeypatch):
+    monkeypatch.delenv("SOME_TEST_VAR", raising=False)
+    (tmp_path / ".env").write_text("# a comment\n\nSOME_TEST_VAR=from-dotenv\n")
+    monkeypatch.setattr(jev_client, "ENV_PATH", tmp_path / ".env")
+
+    jev_client._load_dotenv()
+
+    assert os.environ["SOME_TEST_VAR"] == "from-dotenv"
+
+
+def test_dotenv_never_overrides_a_var_the_shell_already_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("SOME_TEST_VAR", "from-shell")
+    (tmp_path / ".env").write_text("SOME_TEST_VAR=from-dotenv\n")
+    monkeypatch.setattr(jev_client, "ENV_PATH", tmp_path / ".env")
+
+    jev_client._load_dotenv()
+
+    assert os.environ["SOME_TEST_VAR"] == "from-shell"
+
+
+def test_dotenv_is_a_noop_when_the_file_does_not_exist(tmp_path, monkeypatch):
+    monkeypatch.setattr(jev_client, "ENV_PATH", tmp_path / "does-not-exist.env")
+    jev_client._load_dotenv()  # must not raise
 
 
 def test_retries_a_503(monkeypatch):

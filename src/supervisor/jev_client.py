@@ -13,8 +13,36 @@ import time
 import urllib.error
 import urllib.request
 
+from supervisor.paths import REPO_ROOT
+
 DEFAULT_BASE_URL = "https://api.typesafe.ai"
 DEFAULT_MODEL = "jev-latest"
+
+ENV_PATH = REPO_ROOT / ".env"
+
+
+def _load_dotenv() -> None:
+    """Populate os.environ from a gitignored `.env` at the repo root, for
+    TYPESAFE_API_KEY and friends - so a key set once doesn't need exporting
+    in every new shell. Never overrides a variable the shell already set,
+    and does nothing if `.env` doesn't exist.
+
+    Hand-rolled instead of pulling in python-dotenv: the format needed here
+    is `KEY=VALUE` lines plus comments, which is a few lines either way.
+    """
+    if not ENV_PATH.is_file():
+        return
+    for line in ENV_PATH.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'\"")
+        os.environ.setdefault(key, value)
+
+
+_load_dotenv()
 
 # Retries apply only to errors a retry can plausibly fix: a dropped
 # connection/TLS handshake (URLError) or the server's own "back off" status

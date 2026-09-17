@@ -112,12 +112,13 @@ SUPERVISOR_BACKEND=torch SUPERVISOR_MODEL_ID=Qwen/Qwen2.5-7B-Instruct uv run pyt
 
 ### Comparing against Jev (TypeSafe)
 
-`JevJudge` (`src/supervisor/jev_judge.py`) is a drop-in `Judge`-shaped adapter over Typesafe's hosted Jev API, for benchmarking rather than production use — no local weights, one HTTP call per `.ask()`. Export an API key (never commit it) and run the comparison against the local judge:
+`JevJudge` (`src/supervisor/jev_judge.py`) is a drop-in `Judge`-shaped adapter over Typesafe's hosted Jev API, for benchmarking rather than production use — no local weights, one HTTP call per `.ask()`. Put your API key in a local `.env` (copy `.env.example`; `.env` is gitignored and `jev_client.py` loads it automatically, so it's never committed and never needs exporting by hand) and run the comparison against the local judge:
 
 ```bash
-export TYPESAFE_API_KEY=...        # from your TypeSafe dashboard
+cp .env.example .env && $EDITOR .env   # fill in TYPESAFE_API_KEY, from your TypeSafe dashboard
 uv run python scripts/compare_jev.py           # full 164-example eval set
 uv run python scripts/compare_jev.py --limit 10 # quick smoke test
+uv run python scripts/compare_jev.py --skip-local # Jev only, no local model load
 ```
 
 See "Measured results" below for the numbers this produced.

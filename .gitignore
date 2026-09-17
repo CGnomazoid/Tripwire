@@ -5,3 +5,4 @@ __pycache__/
 demo/sandbox/
 .pytest_cache/
 data/audit_log.jsonl
+.env
