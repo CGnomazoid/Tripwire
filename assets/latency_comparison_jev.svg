@@ -1,43 +1,38 @@
 <svg viewBox="0 0 700 280" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
   <rect x="0" y="0" width="700" height="280" fill="#ffffff"/>
 
-  <defs>
-    <pattern id="hatch" width="6" height="6" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-      <rect width="6" height="6" fill="#F28E2B" opacity="0.28"/>
-      <line x1="0" y1="0" x2="0" y2="6" stroke="#F28E2B" stroke-width="2.5" opacity="0.55"/>
-    </pattern>
-  </defs>
-
   <text x="350" y="28" text-anchor="middle" font-size="18" font-weight="700" fill="#1a1a1a">Judge latency: this project vs Jev (TypeSafe)</text>
-  <text x="350" y="46" text-anchor="middle" font-size="12" fill="#666666">Tripwire 7B: measured, this repo's eval mechanism. Jev: TypeSafe's own self-reported range, not run on this eval set.</text>
+  <text x="350" y="46" text-anchor="middle" font-size="12" fill="#666666">Both measured on this repo's 164-example eval set (scripts/compare_jev.py). Bar = p50, faded tail = p95.</text>
 
   <!-- axis -->
   <line x1="150" y1="210" x2="650" y2="210" stroke="#cccccc" stroke-width="1"/>
   <text x="150" y="228" text-anchor="middle" font-size="10.5" fill="#888888">0ms</text>
-  <text x="246" y="228" text-anchor="middle" font-size="10.5" fill="#888888">100ms</text>
-  <text x="342" y="228" text-anchor="middle" font-size="10.5" fill="#888888">200ms</text>
-  <text x="438" y="228" text-anchor="middle" font-size="10.5" fill="#888888">300ms</text>
-  <text x="534" y="228" text-anchor="middle" font-size="10.5" fill="#888888">400ms</text>
-  <text x="630" y="228" text-anchor="middle" font-size="10.5" fill="#888888">500ms</text>
+  <text x="221.4" y="228" text-anchor="middle" font-size="10.5" fill="#888888">50ms</text>
+  <text x="292.9" y="228" text-anchor="middle" font-size="10.5" fill="#888888">100ms</text>
+  <text x="364.3" y="228" text-anchor="middle" font-size="10.5" fill="#888888">150ms</text>
+  <text x="435.7" y="228" text-anchor="middle" font-size="10.5" fill="#888888">200ms</text>
+  <text x="507.1" y="228" text-anchor="middle" font-size="10.5" fill="#888888">250ms</text>
+  <text x="578.6" y="228" text-anchor="middle" font-size="10.5" fill="#888888">300ms</text>
+  <text x="650" y="228" text-anchor="middle" font-size="10.5" fill="#888888">350ms</text>
 
-  <!-- Row 1: Tripwire 7B (measured, bar from zero, whisker shows min-max) -->
+  <!-- Row 1: Tripwire 7B (local, measured) -->
   <text x="10" y="115" font-size="12.5" font-weight="600" fill="#1a1a1a">Tripwire 7B</text>
-  <text x="10" y="129" font-size="10" fill="#888888">measured (n=20)</text>
-  <rect x="150" y="100" width="175.7" height="30" rx="3" fill="#4C78A8"/>
-  <line x1="320.9" y1="115" x2="363.1" y2="115" stroke="#1a3a5c" stroke-width="2"/>
-  <line x1="320.9" y1="109" x2="320.9" y2="121" stroke="#1a3a5c" stroke-width="2"/>
-  <line x1="363.1" y1="109" x2="363.1" y2="121" stroke="#1a3a5c" stroke-width="2"/>
-  <text x="342" y="96" text-anchor="middle" font-size="10" fill="#888888">min 178 - max 222</text>
-  <text x="371.1" y="120" font-size="13" font-weight="700" fill="#1a1a1a">183ms</text>
+  <text x="10" y="129" font-size="10" fill="#888888">local, measured (n=309)</text>
+  <rect x="150" y="100" width="222.9" height="30" rx="3" fill="#4C78A8"/>
+  <rect x="372.9" y="100" width="81.4" height="30" rx="3" fill="#4C78A8" opacity="0.32"/>
+  <line x1="372.9" y1="94" x2="372.9" y2="136" stroke="#1a3a5c" stroke-width="1.5"/>
+  <text x="372.9" y="88" text-anchor="middle" font-size="12" font-weight="700" fill="#1a1a1a">p50 156ms</text>
+  <text x="454.3" y="120" font-size="10.5" fill="#4C78A8">p95 213ms</text>
 
-  <!-- Row 2: Jev (self-reported range, floating bar, hatched) -->
+  <!-- Row 2: Jev (TypeSafe API, measured) -->
   <text x="10" y="175" font-size="12.5" font-weight="600" fill="#1a1a1a">Jev</text>
-  <text x="10" y="189" font-size="10" fill="#888888">self-reported*</text>
-  <rect x="217.2" y="160" width="412.8" height="30" rx="3" fill="url(#hatch)" stroke="#F28E2B" stroke-width="1.5" stroke-dasharray="4 3"/>
-  <line x1="217.2" y1="154" x2="217.2" y2="196" stroke="#c9711a" stroke-width="1.5"/>
-  <line x1="630.0" y1="154" x2="630.0" y2="196" stroke="#c9711a" stroke-width="1.5"/>
-  <text x="423.6" y="150" text-anchor="middle" font-size="13" font-weight="700" fill="#1a1a1a">70-500ms*</text>
+  <text x="10" y="189" font-size="10" fill="#888888">TypeSafe API, measured (n=309)</text>
+  <rect x="150" y="160" width="297.1" height="30" rx="3" fill="#F28E2B"/>
+  <rect x="447.1" y="160" width="121.4" height="30" rx="3" fill="#F28E2B" opacity="0.32"/>
+  <line x1="447.1" y1="154" x2="447.1" y2="196" stroke="#c9711a" stroke-width="1.5"/>
+  <text x="447.1" y="148" text-anchor="middle" font-size="12" font-weight="700" fill="#1a1a1a">p50 208ms</text>
+  <text x="568.6" y="180" font-size="10.5" fill="#c9711a">p95 293ms</text>
 
-  <text x="350" y="252" text-anchor="middle" font-size="11" fill="#888888">* Self-reported by TypeSafe ("Introducing System One Models &amp; Jev"); not measured on our eval set.</text>
-  <text x="350" y="268" text-anchor="middle" font-size="11" fill="#888888">We've requested API access to run a real side-by-side once it's available.</text>
+  <text x="350" y="252" text-anchor="middle" font-size="11" fill="#888888">Same 164-example eval set, same question mix, both judges asked the identical RISK_SCALE/ALLOW_BLOCK/NOUL questions per example.</text>
+  <text x="350" y="268" text-anchor="middle" font-size="11" fill="#888888">Jev's extra latency vs. the local model is consistent with a network round trip vs. an on-device forward pass.</text>
 </svg>

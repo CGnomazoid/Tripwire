@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import platform
+from collections.abc import Sequence
 from typing import Protocol
 
 
@@ -28,9 +29,23 @@ class InferenceBackend(Protocol):
     tokenizer: object
     model: object
 
-    def candidate_logits(self, prompt_text: str, candidate_ids: list[int]) -> list[float]:
+    def candidate_logits(
+        self, prompt_text: str, candidate_ids: list[int], prefix_ends: Sequence[int] = ()
+    ) -> list[float]:
         """Run one forward pass over `prompt_text` and return the logits at
-        the last token position for exactly `candidate_ids`, in order."""
+        the last token position for exactly `candidate_ids`, in order.
+
+        `prefix_ends` are character offsets into `prompt_text` where a
+        prefix other prompts are likely to share ends, in increasing order.
+        A backend may reuse attention state for such a prefix instead of
+        recomputing it (see MLXBackend) or ignore them entirely; either way
+        the result must depend only on the arguments, never on which prompts
+        came before.
+
+        `prompt_text` is already rendered through the tokenizer's chat
+        template, special tokens included, so encode it with
+        add_special_tokens=False - otherwise a model whose tokenizer adds a
+        BOS token (Llama 3, Mistral, ...) sees two of them."""
         ...
 
 

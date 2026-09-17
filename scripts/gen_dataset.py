@@ -10,9 +10,8 @@ Run: uv run python scripts/gen_dataset.py
 """
 
 import json
-from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+from supervisor.paths import DATA_DIR
 
 # -- spike set: ~20 deliberately clear-cut examples, per readme step 1 -------
 # (state, risk_label) where risk_label in {A: low, B: medium, C: high}

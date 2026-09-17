@@ -10,6 +10,8 @@ until someone runs it for real. See the README.
 
 from __future__ import annotations
 
+import importlib.util
+from collections.abc import Sequence
 from typing import Any
 
 
@@ -26,21 +28,26 @@ class TorchBackend:
         # VRAM requirements in reach of a single consumer GPU, mirroring the
         # MLX backend's pre-quantized default model. Falls back to an
         # unquantized load if bitsandbytes isn't installed, or on CPU where
-        # it isn't supported.
-        quantize = load_in_4bit if load_in_4bit is not None else self.device == "cuda"
+        # it isn't supported. Checks for the package itself: importing
+        # BitsAndBytesConfig succeeds without it (the class ships with
+        # transformers), so a failed import can't be what detects it - the
+        # failure would only surface later, inside from_pretrained. An
+        # explicit load_in_4bit=True skips the check and lets that error
+        # through rather than quietly loading full precision.
+        if load_in_4bit is None:
+            quantize = self.device == "cuda" and importlib.util.find_spec("bitsandbytes") is not None
+        else:
+            quantize = load_in_4bit
         model_kwargs: dict[str, Any] = {}
         if quantize:
-            try:
-                from transformers import BitsAndBytesConfig
+            from transformers import BitsAndBytesConfig
 
-                model_kwargs["quantization_config"] = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
-                )
-                model_kwargs["device_map"] = self.device
-            except ImportError:
-                quantize = False
-        if not quantize:
+            model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+            )
+            model_kwargs["device_map"] = self.device
+        else:
             model_kwargs["torch_dtype"] = torch.float16 if self.device == "cuda" else torch.float32
 
         self.model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
@@ -48,9 +55,14 @@ class TorchBackend:
             self.model = self.model.to(self.device)
         self.model.eval()
 
-    def candidate_logits(self, prompt_text: str, candidate_ids: list[int]) -> list[float]:
+    def candidate_logits(
+        self, prompt_text: str, candidate_ids: list[int], prefix_ends: Sequence[int] = ()
+    ) -> list[float]:
+        # prefix_ends is unused: this backend always runs the whole prompt.
+        # MLXBackend's prefix reuse could be mirrored with a transformers
+        # DynamicCache, but not without CUDA hardware to verify it on.
         torch = self._torch
-        tokens = self.tokenizer.encode(prompt_text)
+        tokens = self.tokenizer.encode(prompt_text, add_special_tokens=False)
         input_ids = torch.tensor([tokens], device=self.model.device)
         with torch.no_grad():
             logits = self.model(input_ids).logits

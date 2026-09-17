@@ -9,9 +9,10 @@ which device that pass runs on is the backend's problem, not this class's.
 from __future__ import annotations
 
 import os
+import threading
 import time
-from functools import lru_cache
 
+from supervisor import calibration_store
 from supervisor.backends import DEFAULT_MODEL_IDS, load_backend, resolve_backend_name
 from supervisor.calibration import softmax
 from supervisor.sanitize import strip_comments
@@ -59,7 +60,15 @@ class LabelNotSingleTokenError(ValueError):
 class Judge:
     """Loads one model once (via a pluggable backend), then answers typed
     questions against it in a single forward pass each (no autoregressive
-    generation)."""
+    generation).
+
+    Safe to share across threads: asks are serialized. The MCP SDK runs
+    sync tools on worker threads, so concurrent calls into one Judge are
+    the normal case there, and neither backend promises concurrent use of
+    one model is safe (Hugging Face fast tokenizers raise "Already
+    borrowed" under it). Serializing costs no throughput either - there is
+    one accelerator underneath, and the forward pass is what fills it.
+    """
 
     def __init__(
         self,
@@ -72,12 +81,28 @@ class Judge:
             model_id or os.environ.get("SUPERVISOR_MODEL_ID") or DEFAULT_MODEL_IDS[self.backend_name]
         )
         self.temperature = temperature
-        t0 = time.time()
+        t0 = time.perf_counter()
         self._backend = load_backend(self.backend_name, self.model_id)
-        self.load_time_s = time.time() - t0
+        self.load_time_s = time.perf_counter() - t0
         self.tokenizer = self._backend.tokenizer
         self.model = self._backend.model
         self._label_token_cache: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    @classmethod
+    def calibrated(cls, model_id: str | None = None, backend: str | None = None) -> Judge:
+        """A Judge using the temperature scripts/run_eval.py fitted for
+        whichever model it resolves to (1.0 if that model was never
+        calibrated - see calibration_store.load_temperature).
+
+        The lookup happens after construction on purpose: `model_id` may be
+        None here and only become concrete once SUPERVISOR_MODEL_ID and the
+        backend default are applied, and a temperature fitted for one model
+        is wrong for any other.
+        """
+        judge = cls(model_id=model_id, backend=backend)
+        judge.temperature = calibration_store.load_temperature(judge.model_id)
+        return judge
 
     # -- label <-> single-token id plumbing -------------------------------
 
@@ -97,26 +122,36 @@ class Judge:
 
     # -- prompt construction ------------------------------------------------
 
-    def _build_prompt(self, state: str, question_block: str, system_prompt: str) -> str:
+    def _build_prompt(
+        self, state: str, question_block: str, system_prompt: str, varying_part: str | None
+    ) -> tuple[str, list[int]]:
+        """The rendered prompt, plus the character offsets where its
+        reusable prefixes end (see InferenceBackend.candidate_logits): just
+        before the user message, which ends the part every ask of this
+        question kind shares, and - if `varying_part` is given - just before
+        it, the first text that differs between questions asked back to
+        back about one state.
+
+        Offsets are looked up in the rendered text rather than assumed, and
+        from the end for `varying_part` since the state may quote anything;
+        one a template doesn't reproduce verbatim is simply left out.
+        """
+        user_content = f"STATE:\n{state}\n\n{question_block}"
         messages = [
             {"role": "system", "content": system_prompt},
-            {
-                "role": "user",
-                "content": f"STATE:\n{state}\n\n{question_block}",
-            },
+            {"role": "user", "content": user_content},
         ]
-        return self.tokenizer.apply_chat_template(
+        prompt = self.tokenizer.apply_chat_template(
             messages, add_generation_prompt=True, tokenize=False
         )
+        ends = [prompt.find(user_content)]
+        if varying_part is not None:
+            ends.append(prompt.rfind(varying_part))
+        return prompt, [end for end in ends if end > 0]
 
     @staticmethod
     def _format_options(options: list[ChoiceOption]) -> str:
         return "\n".join(f"{o.label}) {o.text}" for o in options)
-
-    # -- the actual forward pass --------------------------------------------
-
-    def _candidate_logits(self, prompt_text: str, candidate_ids: list[int]) -> list[float]:
-        return self._backend.candidate_logits(prompt_text, candidate_ids)
 
     # -- public API -----------------------------------------------------------
 
@@ -127,7 +162,6 @@ class Judge:
         # audit logging) should hold onto their own copy of it.
         state = strip_comments(state)
         t = self.temperature if temperature is None else temperature
-        t0 = time.time()
 
         # All three question types are the same mechanism: lay out labeled
         # candidates, run one forward pass, read the logits at those labels.
@@ -136,16 +170,32 @@ class Judge:
         if isinstance(question, (ChoiceQuestion, ScoreQuestion)):
             is_score = isinstance(question, ScoreQuestion)
             options = question.scale if is_score else question.options
-            labels = [o.label for o in options]
+            prompt_labels = answer_labels = [o.label for o in options]
             heading = "SCALE (low to high)" if is_score else "OPTIONS"
+            options_text = self._format_options(options)
+            # Where prompts split for prefix reuse is fixed per question kind
+            # (the split changes fp16 numerics slightly, so it must never
+            # depend on what was asked before). Every kind splits after its
+            # system prompt. Choice questions also split before their
+            # options, because they come in pairs - ask_allow_block's two
+            # orderings share everything else - and on the reference M4 Max
+            # that took should_block from ~265ms to ~190ms at no cost to a
+            # lone choice ask. The same split made a lone RISK_SCALE ask
+            # ~40ms slower (an extra pass that reuses nothing) and bought
+            # probability questions nothing measurable, so they don't get it.
+            varying_part = None if is_score else options_text
             block = (
                 f"QUESTION: {question.prompt}\n\n{heading}:\n"
-                f"{self._format_options(options)}\n\n"
-                f"Answer with exactly one letter: {', '.join(labels)}."
+                f"{options_text}\n\n"
+                f"Answer with exactly one letter: {', '.join(prompt_labels)}."
             )
             system_prompt = SCORE_SYSTEM_PROMPT if is_score else CHOICE_SYSTEM_PROMPT
         elif isinstance(question, ProbabilityQuestion):
-            labels = [_TRUE_LABEL, _FALSE_LABEL]
+            prompt_labels = [_TRUE_LABEL, _FALSE_LABEL]
+            # Reported under "true"/"false" rather than the T/F prompt
+            # tokens - callers care about the statement, not the encoding.
+            answer_labels = ["true", "false"]
+            varying_part = None
             block = (
                 f"STATEMENT: {question.statement}\n\n"
                 f"Is this statement true? Answer with exactly one letter: "
@@ -155,47 +205,37 @@ class Judge:
         else:
             raise TypeError(f"unsupported question type: {type(question)!r}")
 
-        cand_logits = self._candidate_logits(
-            self._build_prompt(state, block, system_prompt),
-            [self._label_token_id(l) for l in labels],
-        )
-        raw = softmax(cand_logits, 1.0)
-        cal = softmax(cand_logits, t)
-        best_i = max(range(len(labels)), key=lambda i: cal[i])
-        latency_ms = (time.time() - t0) * 1000
+        with self._lock:
+            # Timed inside the lock: latency_ms is what this answer cost,
+            # not how long it queued behind someone else's.
+            t0 = time.perf_counter()
+            candidate_ids = [self._label_token_id(label) for label in prompt_labels]
+            prompt, prefix_ends = self._build_prompt(state, block, system_prompt, varying_part)
+            logits = self._backend.candidate_logits(prompt, candidate_ids, prefix_ends)
+            latency_ms = (time.perf_counter() - t0) * 1000
 
-        if isinstance(question, ProbabilityQuestion):
-            # Reported under "true"/"false" rather than the T/F prompt
-            # tokens - callers care about the statement, not the encoding.
-            labels = ["true", "false"]
-            extra = {"probability_true": cal[0]}
-        else:
-            extra = {"ordinal": best_i} if is_score else {}
+        raw = softmax(logits)
+        cal = softmax(logits, t)
+        # max() keeps the first of tied candidates, so an exact P(true) ==
+        # 0.5 resolves to "true" and a tied choice to its earliest option.
+        best = max(range(len(cal)), key=cal.__getitem__)
 
+        extra: dict[str, float | int] = {}
+        if isinstance(question, ScoreQuestion):
+            extra["ordinal"] = best
+        elif isinstance(question, ProbabilityQuestion):
+            extra["probability_true"] = cal[0]
 
         return JudgeAnswer(
             kind=question.kind,
-            answer=labels[best_i],
-            confidence=cal[best_i],
-            raw_logits=dict(zip(labels, cand_logits)),
-            raw_probs=dict(zip(labels, raw)),
-            calibrated_probs=dict(zip(labels, cal)),
+            answer=answer_labels[best],
+            confidence=cal[best],
+            raw_logits=dict(zip(answer_labels, logits)),
+            raw_probs=dict(zip(answer_labels, raw)),
+            calibrated_probs=dict(zip(answer_labels, cal)),
             temperature=t,
             latency_ms=latency_ms,
             state=state,
             question=question,
             **extra,
         )
-
-
-@lru_cache(maxsize=4)
-def get_judge(
-    model_id: str | None = None, backend: str | None = None, temperature: float = 1.0
-) -> Judge:
-    """Process-wide cached Judge instance per (model_id, backend,
-    temperature), so a demo or server doesn't reload weights on every call.
-
-    Loading is lazy in the sense that matters: the first caller pays for the
-    weights, everyone after that gets them for free.
-    """
-    return Judge(model_id=model_id, backend=backend, temperature=temperature)

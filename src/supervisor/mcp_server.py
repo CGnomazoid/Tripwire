@@ -22,9 +22,12 @@ As an MCP client config entry, point `command` at `uv` with args
 ["run", "--directory", "/absolute/path/to/repo", "python", "-m", "supervisor.mcp_server"].
 """
 
-from mcp.server.mcpserver import MCPServer
+import threading
+from typing import Annotated
 
-from supervisor import calibration_store
+from mcp.server.mcpserver import MCPServer
+from pydantic import Field
+
 from supervisor.audit_log import log_call
 from supervisor.judge import Judge
 from supervisor.multiline import assess_shell_command as _assess_shell_command
@@ -32,21 +35,30 @@ from supervisor.questions import RISK_NAMES, RISK_SCALE, ask_allow_block, decide
 from supervisor.types import ChoiceOption, ChoiceQuestion, ProbabilityQuestion
 
 _judge: Judge | None = None
+_judge_lock = threading.Lock()
+
+# A confidence is a probability, so a threshold outside [0, 1] can only mean
+# "always uncertain" or "never uncertain" by accident - reject it in the
+# tool schema instead of silently honoring it.
+Threshold = Annotated[float, Field(ge=0.0, le=1.0)]
 
 
 def _get_judge() -> Judge:
     """Lazy singleton: load weights on first tool call, not at server
     startup, so the MCP initialize handshake doesn't block on a ~50s
-    first-ever model download. Calibration is looked up AFTER construction,
-    keyed on whatever model_id Judge actually resolved to (it may differ
-    from any hardcoded default - see SUPERVISOR_MODEL_ID/SUPERVISOR_BACKEND)
-    so a model swap can't accidentally pick up a different model's
-    temperature."""
+    first-ever model download. Judge.calibrated() applies the temperature
+    fitted for whichever model_id the Judge actually resolved to (see
+    SUPERVISOR_MODEL_ID/SUPERVISOR_BACKEND).
+
+    Locked because the MCP SDK runs sync tools on worker threads: without
+    it, two tool calls arriving before the first load finishes would each
+    load their own copy of the weights - several GB apiece - and one would
+    be thrown away."""
     global _judge
-    if _judge is None:
-        _judge = Judge()
-        _judge.temperature = calibration_store.load_temperature(_judge.model_id)
-    return _judge
+    with _judge_lock:
+        if _judge is None:
+            _judge = Judge.calibrated()
+        return _judge
 
 
 mcp = MCPServer(
@@ -97,7 +109,7 @@ def assess_risk(state: str, reason: str | None = None) -> dict[str, str | float 
 
 @mcp.tool(structured_output=True)
 def should_block(
-    state: str, reason: str | None = None, confidence_threshold: float | None = None
+    state: str, reason: str | None = None, confidence_threshold: Threshold | None = None
 ) -> dict[str, str | float | None]:
     """Decide whether a proposed tool call should be blocked pending human
     confirmation, is fine to run automatically, or is uncertain enough that
@@ -169,7 +181,7 @@ def judge_statement(state: str, statement: str, reason: str | None = None) -> di
 
 @mcp.tool(structured_output=True)
 def ask_custom_choice(
-    state: str, prompt: str, options: list[dict], reason: str | None = None
+    state: str, prompt: str, options: list[ChoiceOption], reason: str | None = None
 ) -> dict[str, str | float | dict | None]:
     """Ask a custom multiple-choice question about a proposed tool call, for
     decisions that don't fit the built-in risk/allow-block framing.
@@ -177,17 +189,13 @@ def ask_custom_choice(
     Args:
         state: plain-text description of the tool call.
         prompt: the question to ask.
-        options: 2-4 options, each {"label": "A", "text": "description"}.
+        options: at least 2 options, each {"label": "A", "text": "description"}.
             Labels must be single letters (A-Z tokenize to exactly one
             token, which the underlying model needs).
         reason: optional - why you (the calling agent) believe this action
             is needed. Does not affect the answer. Logged and echoed back.
     """
-    question = ChoiceQuestion(
-        prompt=prompt,
-        options=[ChoiceOption(label=o["label"], text=o["text"]) for o in options],
-    )
-    result = _get_judge().ask(state, question)
+    result = _get_judge().ask(state, ChoiceQuestion(prompt=prompt, options=options))
     response = {
         "answer": result.answer,
         "confidence": round(result.confidence, 4),
@@ -201,7 +209,7 @@ def ask_custom_choice(
 
 @mcp.tool(structured_output=True)
 def assess_shell_command(
-    cmd: str, reason: str | None = None, confidence_threshold: float | None = None
+    cmd: str, reason: str | None = None, confidence_threshold: Threshold | None = None
 ) -> dict[str, str | int | list | None]:
     """Judge a shell command that may chain multiple statements together
     (via &&, ||, ; or newlines). Splits it into individual commands and

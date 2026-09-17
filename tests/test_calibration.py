@@ -3,6 +3,8 @@ run fast and don't need a GPU/model download)."""
 
 import math
 
+import pytest
+
 from supervisor.calibration import CalibrationExample, expected_calibration_error, fit_temperature
 
 
@@ -76,7 +78,7 @@ def test_fit_temperature_stays_finite_on_extreme_confident_wrong_logits():
     examples = [CalibrationExample(logits=[1000.0, -1000.0], correct_index=1)]
     t = fit_temperature(examples)
     assert math.isfinite(t)
-    assert t > 5.0  # should push toward the top of the search range (t_max=8.0)
+    assert t > 5.0  # should push toward the top of the search range
 
 
 def test_fit_temperature_handles_all_tied_logits():
@@ -98,3 +100,29 @@ def test_ece_handles_boundary_confidences_of_exactly_zero_and_one():
     result = expected_calibration_error([0.0, 1.0], [False, True])
     assert math.isfinite(result.ece)
     assert math.isclose(result.ece, 0.0, abs_tol=1e-9)
+
+
+def test_fit_temperature_is_not_capped_at_the_old_grid_ceiling():
+    # Qwen2.5-14B's stored fit was 7.999999999999998 - the old t_max=8.0,
+    # not a minimum. Logit gap 20, right 3 times in 4: the NLL-optimal
+    # temperature solves softmax(20 / T) = 0.75, i.e. T = 20 / ln(3) ~ 18.2.
+    examples = [CalibrationExample(logits=[20.0, 0.0], correct_index=0) for _ in range(3)]
+    examples.append(CalibrationExample(logits=[20.0, 0.0], correct_index=1))
+
+    assert fit_temperature(examples) == pytest.approx(20 / math.log(3), rel=0.01)
+
+
+def test_fit_temperature_finds_the_exact_minimum_not_a_nearby_grid_point():
+    # two-class, gap 4, right 9 times in 10: optimum solves
+    # sigmoid(4 / T) = 0.9, i.e. T = 4 / ln(9)
+    examples = [CalibrationExample(logits=[4.0, 0.0], correct_index=0) for _ in range(9)]
+    examples.append(CalibrationExample(logits=[4.0, 0.0], correct_index=1))
+
+    assert fit_temperature(examples) == pytest.approx(4 / math.log(9), rel=1e-3)
+
+
+def test_fit_temperature_lands_on_the_range_edge_when_the_minimum_is_outside_it():
+    examples = [CalibrationExample(logits=[20.0, 0.0], correct_index=0) for _ in range(3)]
+    examples.append(CalibrationExample(logits=[20.0, 0.0], correct_index=1))  # optimum ~18.2
+
+    assert fit_temperature(examples, t_max=8.0) == pytest.approx(8.0, rel=1e-3)

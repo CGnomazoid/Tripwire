@@ -1,5 +1,5 @@
 from supervisor.backends import DEFAULT_MODEL_IDS
-from supervisor.judge import Judge, get_judge
+from supervisor.judge import Judge
 from supervisor.questions import ALLOW_BLOCK, RISK_SCALE
 from supervisor.types import (
     ChoiceOption,
@@ -12,7 +12,6 @@ from supervisor.types import (
 
 __all__ = [
     "Judge",
-    "get_judge",
     "DEFAULT_MODEL_IDS",
     "ChoiceOption",
     "ChoiceQuestion",

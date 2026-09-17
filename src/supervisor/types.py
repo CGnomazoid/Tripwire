@@ -7,9 +7,11 @@ candidate-answer token positions) but have different ergonomics for callers.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AfterValidator, BaseModel, Field
+
+from supervisor.calibration import softmax
 
 
 class ChoiceOption(BaseModel):
@@ -21,22 +23,27 @@ class ChoiceOption(BaseModel):
     text: str
 
 
+def _check_options(options: list[ChoiceOption]) -> list[ChoiceOption]:
+    if len(options) < 2:
+        raise ValueError("needs at least 2 options to choose between")
+    labels = [o.label for o in options]
+    if len(set(labels)) != len(labels):
+        # two options sharing a label would read the same logit twice
+        raise ValueError(f"option labels must be unique, got {labels}")
+    return options
+
+
+Options = Annotated[list[ChoiceOption], AfterValidator(_check_options)]
+"""At least two options with distinct labels - what both option-list
+question kinds need for the logit read to mean anything."""
+
+
 class ChoiceQuestion(BaseModel):
     """Pick one of N labeled options."""
 
     kind: Literal["choice"] = "choice"
     prompt: str
-    options: list[ChoiceOption]
-
-    @field_validator("options")
-    @classmethod
-    def _at_least_two(cls, v: list[ChoiceOption]) -> list[ChoiceOption]:
-        if len(v) < 2:
-            raise ValueError("choice question needs at least 2 options")
-        labels = [o.label for o in v]
-        if len(set(labels)) != len(labels):
-            raise ValueError("option labels must be unique")
-        return v
+    options: Options
 
 
 class ScoreQuestion(BaseModel):
@@ -46,17 +53,7 @@ class ScoreQuestion(BaseModel):
 
     kind: Literal["score"] = "score"
     prompt: str
-    scale: list[ChoiceOption]  # ordered low -> high
-
-    @field_validator("scale")
-    @classmethod
-    def _at_least_two(cls, v: list[ChoiceOption]) -> list[ChoiceOption]:
-        if len(v) < 2:
-            raise ValueError("score question needs at least 2 scale points")
-        labels = [o.label for o in v]
-        if len(set(labels)) != len(labels):
-            raise ValueError("scale labels must be unique")
-        return v
+    scale: Options  # ordered low -> high
 
 
 class ProbabilityQuestion(BaseModel):
@@ -104,3 +101,24 @@ class JudgeAnswer(BaseModel):
     latency_ms: float
     state: str
     question: Question = Field(discriminator="kind")
+
+    def with_temperature(self, temperature: float) -> JudgeAnswer:
+        """This answer re-scaled to another temperature from its stored raw
+        logits - no forward pass. `answer` can't change (softmax(logits / T)
+        has the same argmax for every T > 0); confidence, calibrated_probs
+        and probability_true do.
+
+        Only meaningful for an answer straight out of Judge.ask(). One
+        merged by questions.combine_allow_block no longer has a confidence
+        derived from its logits: re-scale the inputs, then combine.
+        """
+        labels = list(self.raw_logits)
+        probs = softmax(list(self.raw_logits.values()), temperature)
+        update: dict[str, object] = {
+            "confidence": probs[labels.index(self.answer)],
+            "calibrated_probs": dict(zip(labels, probs)),
+            "temperature": temperature,
+        }
+        if self.kind == "probability":
+            update["probability_true"] = probs[labels.index("true")]
+        return self.model_copy(update=update)

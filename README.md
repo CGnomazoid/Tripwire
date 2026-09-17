@@ -98,6 +98,10 @@ uv run python demo/agent_demo.py
 from supervisor import Judge
 
 judge = Judge(backend="torch", model_id="Qwen/Qwen2.5-7B-Instruct")
+
+# Same, with the temperature scripts/run_eval.py fitted for that model applied
+# (what the MCP server, try_it.py and the demo use; 1.0 if it was never calibrated):
+judge = Judge.calibrated(backend="torch", model_id="Qwen/Qwen2.5-7B-Instruct")
 ```
 
 Or without touching code, via environment variables (also picked up by `try_it.py`, the eval scripts, and the MCP server):
@@ -105,6 +109,18 @@ Or without touching code, via environment variables (also picked up by `try_it.p
 ```bash
 SUPERVISOR_BACKEND=torch SUPERVISOR_MODEL_ID=Qwen/Qwen2.5-7B-Instruct uv run python scripts/try_it.py
 ```
+
+### Comparing against Jev (TypeSafe)
+
+`JevJudge` (`src/supervisor/jev_judge.py`) is a drop-in `Judge`-shaped adapter over Typesafe's hosted Jev API, for benchmarking rather than production use — no local weights, one HTTP call per `.ask()`. Export an API key (never commit it) and run the comparison against the local judge:
+
+```bash
+export TYPESAFE_API_KEY=...        # from your TypeSafe dashboard
+uv run python scripts/compare_jev.py           # full 164-example eval set
+uv run python scripts/compare_jev.py --limit 10 # quick smoke test
+```
+
+See "Measured results" below for the numbers this produced.
 
 ## 🔌 Use it as an MCP server
 
@@ -133,24 +149,33 @@ Point your MCP client at `uv run` with `--directory` set to this repo:
 
 Every tool accepts an optional `reason` — the calling agent's own stated justification for the action. It is **logged and echoed back for human review** (and surfaced in `should_block`'s message when the action is blocked or uncertain) but it is **never fed into the model's scoring prompt**. The risk score stays a pure function of the proposed action itself, so a fluent, plausible-sounding excuse can't talk the judge into a lower score. See `src/supervisor/audit_log.py`.
 
-`should_block` and `assess_shell_command` don't force a binary call when the model's raw confidence is genuinely low — below `confidence_threshold` (default 0.6, see `supervisor.questions.DEFAULT_UNCERTAIN_THRESHOLD`), the decision comes back `"uncertain"` instead of guessing. `assess_shell_command` splits a chained/multi-line shell command (`&&`, `||`, `;`, newlines — not `|`, since a pipeline's danger is usually the composition itself, e.g. `curl ... | sh`) into individual statements, judges each one, and reports the worst verdict across all of them plus a per-command breakdown, so one risky line can't get diluted by a lot of benign ones around it.
+`should_block` and `assess_shell_command` don't force a binary call when the model's raw confidence is genuinely low — below `confidence_threshold` (default 0.6, see `supervisor.questions.DEFAULT_UNCERTAIN_THRESHOLD`), the decision comes back `"uncertain"` instead of guessing. `assess_shell_command` splits a chained/multi-line shell command (`&&`, `||`, `;`, newlines — not `|`, since a pipeline's danger is usually the composition itself, e.g. `curl ... | sh`) into individual statements, judges each one, and reports the worst verdict across all of them plus a per-command breakdown, so one risky line can't get diluted by a lot of benign ones around it. Comments are stripped from each command before it's judged, the same `#`/`//` sanitizing every other tool gets (see `src/supervisor/sanitize.py`), and a comment-only line isn't judged at all.
 
 ## 📊 Measured results
 
-Real numbers from `scripts/run_eval.py`, not estimates:
+Real numbers from `scripts/run_eval.py` (accuracy, calibration) and `scripts/run_spike.py` (latency), not estimates:
 
 - **Latency:** ~183ms mean end-to-end through `Judge.ask()` (min 178ms, max 222ms; tokenize + forward + softmax), measured on an Apple M4 Max MacBook Pro (14-core CPU / 32-core GPU, 36GB unified memory).
 - **Accuracy:** on a 164-example hand-labeled eval set (file ops, db, network, finance, comms, infra, code exec, account mgmt, plus a deliberately near-50/50 `borderline` bucket), held-out answer accuracy is 70.2%; probability-question accuracy (full dataset) is 84.2%.
-- **`should_block` accuracy, measured directly (not derived):** **77.6%**. Earlier versions of this README quoted a number computed from the separate risk-scale question's answer, not from actually calling the `ALLOW_BLOCK` question `should_block()` uses in production. Weakest true category: `network` at 68.8% (the intentionally ambiguous `borderline` bucket scores lower still, at 47.4%, but that's by design — see `scripts/gen_dataset.py`).
-- **Calibration:** the raw model is meaningfully overconfident — expected calibration error (ECE) starts at **0.214** and drops to **0.075** after fitting a single scalar temperature (T=6.05) via NLL minimization on a held-out split. Temperature scaling doesn't change *what* the model answers, only how honestly it reports its own confidence — it can soften an overconfident wrong answer, but it can't flip a genuinely near-50/50 one (see Known limitations).
+- **`should_block` accuracy, measured directly (not derived):** **77.6%**. Earlier versions of this README quoted a number computed from the separate risk-scale question's answer, not from actually calling the `ALLOW_BLOCK` question `should_block()` uses in production. That number is the question forced to a binary allow/block from one option order; weakest true category: `network` at 68.8% (the intentionally ambiguous `borderline` bucket scores lower still, at 47.4%, but that's by design — see `scripts/gen_dataset.py`).
+- **`should_block` as deployed:** asking both option orders and applying the 60% uncertain threshold (see Known limitations), it decides 36 of the 58 held-out cases and is right on **88.9%** of those, with **zero false allows** — the other 22 (38%) come back `"uncertain"` for a human instead of being guessed. `run_eval.py` prints what the threshold and the order check each contribute.
+- **Calibration:** the raw model is meaningfully overconfident — expected calibration error (ECE) starts at **0.214** and drops to **0.076** after fitting a single scalar temperature (T=6.08) via exact NLL minimization on a held-out split. (ECE is a binned metric and jumpy in T — anywhere from 0.064 to 0.096 for T between 5.8 and 6.3, where NLL barely moves — so treat differences in the second decimal as noise.) Temperature scaling doesn't change *what* the model answers, only how honestly it reports its own confidence — it can soften an overconfident wrong answer, but it can't flip a genuinely near-50/50 one (see Known limitations).
 
-### Latency vs. Jev (TypeSafe)
+### vs. Jev (TypeSafe)
 
-[TypeSafe](https://typesafe.ai/) is building something in a similar space — [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev), a hosted "System One Model" that returns typed, calibrated decisions instead of free text. It's API-only, currently in early access (we're on the waitlist), and their announcement post doesn't publish an accuracy or ECE number comparable to the ones above — only a latency range:
+[TypeSafe](https://typesafe.ai/) is building something in a similar space — [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev), a hosted "System One Model" that returns typed, calibrated decisions instead of free text; its three question primitives (Choice, Score, Noul) are exactly `supervisor.types`' Choice/Score/Probability. We got API access and ran it against the same 164-example eval set and the same question mix as the local judge, via `scripts/compare_jev.py` (`JevJudge` in `src/supervisor/jev_judge.py` adapts Typesafe's `/v1/systemone` response into the same `JudgeAnswer` shape `Judge.ask()` returns, so both go through identical accuracy/ECE/temperature-fitting code):
 
-![Bar chart comparing latency: Tripwire's 7B judge measured at 183ms mean (178-222ms range) end-to-end, vs Jev's self-reported 70-500ms range from TypeSafe's announcement post for general System One tasks. Jev's range is not measured on this project's eval set.](assets/latency_comparison_jev.svg)
+![Bar chart comparing measured judge latency on this project's 164-example eval set: Tripwire's local 7B judge at p50 156ms / p95 213ms, vs Jev (TypeSafe API) at p50 208ms / p95 293ms.](assets/latency_comparison_jev.svg)
 
-That 70-500ms figure is TypeSafe's own number, for their general "System One" task shape, not run against this project's eval set — so no accuracy/should_block/ECE comparison exists yet, and this latency figure alone doesn't say which is faster on a task like ours (183ms sits inside their stated range either way). We'll replace this with a real measured comparison once API access comes through.
+| metric | local (Qwen2.5-7B, MLX) | Jev (`jev-latest`) |
+|---|---|---|
+| held-out answer accuracy | **70.2%** | 66.1% |
+| `should_block` accuracy (deployed rule) | 73.8% | **75.2%** |
+| ECE, raw (T=1.0) | 0.2142 | **0.1715** |
+| ECE, fitted temperature | **0.0758** | 0.0814 |
+| latency p50 / p95 | **156ms / 208ms** | 208ms / 293ms |
+
+On this eval set the two are close, and which one "wins" depends which metric you weight: the local model is more accurate on raw answers and faster; Jev is *more* accurate on `should_block` specifically (the number that actually gates a tool call) and better-calibrated before any temperature fitting. An earlier version of this comparison sent Jev only the bare question prompt, without the domain guidance (e.g. the deletion-risk heuristic) the local model's system prompt carries — Jev's accuracy under that unfair comparison was 61.3%/66.2%; giving it the same guidance, phrased in Typesafe's own recommended structured-instructions format rather than a flat prose string (see `src/supervisor/jev_judge.py`), closed most of that gap. Small eval set (164 examples, one model snapshot each) — treat this as a first data point, not a verdict; rerun with `uv run python scripts/compare_jev.py` (needs `TYPESAFE_API_KEY` set) if either model or the questions change.
 
 ## ⚠️ Known limitations
 

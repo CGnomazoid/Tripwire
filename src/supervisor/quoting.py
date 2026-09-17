@@ -23,42 +23,51 @@ def quote_mask(text: str) -> list[bool]:
     `'it\\'s'` stays one span.
 
     Unbalanced quotes are recovered from rather than swallowing the rest of
-    the line: if the scan reaches the end still inside a quote, that opening
-    quote is reinterpreted as an ordinary character and scanning resumes
-    right after it. This matters because the common case of an unbalanced
-    quote isn't a truncated string, it's an apostrophe in ordinary prose
-    ("don't", "user's") - treating everything after it as quoted would hide
-    a trailing `# comment` from the sanitizer, and treating the whole line
-    as unquoted would let a `#` inside a genuine quoted span be stripped.
+    the line: an opening quote that is never closed is treated as an
+    ordinary character, and scanning carries on right after it. This
+    matters because the common case of an unbalanced quote isn't a
+    truncated string, it's an apostrophe in ordinary prose ("don't",
+    "user's") - treating everything after it as quoted would hide a
+    trailing `# comment` from the sanitizer, and treating the whole line as
+    unquoted would let a `#` inside a genuine quoted span be stripped.
     Recovering at the offending quote gets both cases right.
+
+    Where each quoted span would end is precomputed (see _closing_quotes),
+    so deciding whether an opening quote is ever closed is a lookup rather
+    than a rescan to the end of the text. Rescanning made this quadratic: a
+    few kilobytes of `'\\'\\'\\'...` - every quote unbalanced - took seconds.
     """
-    mask = [False] * len(text)
     n = len(text)
+    closers = {q: _closing_quotes(text, q) for q in _QUOTES}
+    mask = [False] * n
     i = 0
-    quote: str | None = None
-    open_at = -1
-    while True:
-        while i < n:
-            ch = text[i]
-            if quote is None:
-                if ch in _QUOTES:
-                    quote, open_at = ch, i
-                    mask[i] = True
-                i += 1
-                continue
-            mask[i] = True
-            if ch == ESCAPE and i + 1 < n:
-                mask[i + 1] = True
-                i += 2
-                continue
-            if ch == quote:
-                quote = None
+    while i < n:
+        end = closers[text[i]][i + 1] if text[i] in closers else None
+        if end is None:
+            # not a quote, or an opening quote that is never closed
             i += 1
-        if quote is None:
-            return mask
-        # Unterminated: un-quote the opening delimiter and rescan from just
-        # past it. Each restart moves the earliest unmatched quote strictly
-        # forward, so this terminates.
-        for j in range(open_at, n):
-            mask[j] = False
-        quote, i = None, open_at + 1
+            continue
+        mask[i : end + 1] = [True] * (end + 1 - i)
+        i = end + 1
+    return mask
+
+
+def _closing_quotes(text: str, quote: str) -> list[int | None]:
+    """`result[i]` is the index of the `quote` that ends a span whose scan
+    has reached position i (skipping backslash-escaped characters), or None
+    if the span runs off the end of `text` unclosed.
+
+    Filled right to left so each entry reuses one already computed: O(n)
+    for the whole table. Two trailing None entries stand in for "past the
+    end", so neither `i + 1` nor an escape's `i + 2` needs a bounds check.
+    """
+    n = len(text)
+    result: list[int | None] = [None] * (n + 2)
+    for i in range(n - 1, -1, -1):
+        if text[i] == ESCAPE and i + 1 < n:
+            result[i] = result[i + 2]
+        elif text[i] == quote:
+            result[i] = i
+        else:
+            result[i] = result[i + 1]
+    return result

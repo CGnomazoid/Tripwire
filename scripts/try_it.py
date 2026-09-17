@@ -21,12 +21,12 @@ import sys
 from rich.console import Console
 from rich.panel import Panel
 
-from supervisor import ALLOW_BLOCK, RISK_SCALE, Judge, ProbabilityQuestion, calibration_store
-from supervisor.questions import RISK_NAMES, decide
+from supervisor import RISK_SCALE, Judge, ProbabilityQuestion
+from supervisor.questions import RISK_NAMES, ask_allow_block, decide
 
 console = Console()
 
-REVERSIBLE_Q = ProbabilityQuestion(statement="This action could cause irreversible harm.")
+IRREVERSIBLE_HARM_Q = ProbabilityQuestion(statement="This action could cause irreversible harm.")
 
 DECISION_DISPLAY = {
     "uncertain": ("UNCERTAIN (ask a human)", "yellow"),
@@ -34,23 +34,26 @@ DECISION_DISPLAY = {
     "allow": ("ALLOW", "green"),
 }
 
+
 def judge_one(judge: Judge, state: str) -> None:
     risk = judge.ask(state, RISK_SCALE)
-    allow = judge.ask(state, ALLOW_BLOCK)
-    harm = judge.ask(state, REVERSIBLE_Q)
+    # the same two-ordering check should_block() uses, so the playground
+    # can't show a different decision than the MCP server would make
+    block = ask_allow_block(judge, state)
+    harm = judge.ask(state, IRREVERSIBLE_HARM_Q)
 
     risk_label = RISK_NAMES[risk.answer].upper()
     color = {"A": "green", "B": "yellow", "C": "red"}[risk.answer]
-    decision, decision_color = DECISION_DISPLAY[decide(allow.answer, allow.confidence)]
+    decision, decision_color = DECISION_DISPLAY[decide(block.answer, block.confidence)]
 
     body = (
         f"[bold {color}]risk: {risk_label}[/bold {color}] "
         f"(confidence {risk.confidence:.1%}, raw_probs={_fmt(risk.raw_probs)})\n"
         f"[bold {decision_color}]decision: {decision}[/bold {decision_color}] "
-        f"(confidence {allow.confidence:.1%})\n"
+        f"(confidence {block.confidence:.1%})\n"
         f"P(irreversible harm) = {harm.probability_true:.1%}\n"
         f"[dim]latency: risk={risk.latency_ms:.0f}ms  "
-        f"allow={allow.latency_ms:.0f}ms  harm={harm.latency_ms:.0f}ms "
+        f"decision={block.latency_ms:.0f}ms  harm={harm.latency_ms:.0f}ms "
         f"(NOTHING WAS EXECUTED - judged only)[/dim]"
     )
     console.print(Panel(body, title=state, title_align="left"))
@@ -66,8 +69,7 @@ def main() -> None:
         "[dim]Nothing you type is ever executed.[/dim]"
     )
     console.print("Loading judge...")
-    judge = Judge()
-    judge.temperature = calibration_store.load_temperature(judge.model_id)
+    judge = Judge.calibrated()
     console.print(f"Loaded {judge.model_id} in {judge.load_time_s:.2f}s (calibrated T={judge.temperature:.3f})\n")
 
     if len(sys.argv) > 1:

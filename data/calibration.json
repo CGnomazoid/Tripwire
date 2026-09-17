@@ -1,20 +1,24 @@
 {
   "mlx-community/Qwen2.5-7B-Instruct-4bit": {
-    "temperature": 6.047272817695277,
+    "temperature": 6.079820394688231,
     "n_calibration_examples": 185,
-    "held_out_ece_raw": 0.21381552858084746,
-    "held_out_ece_calibrated": 0.07538278356754058,
+    "held_out_ece_raw": 0.21420884141336022,
+    "held_out_ece_calibrated": 0.07582932247461605,
     "held_out_accuracy": 0.7016129032258065,
     "held_out_block_accuracy_derived": 0.8666666666666667,
-    "held_out_block_accuracy_direct": 0.7758620689655172
+    "held_out_block_accuracy_direct": 0.7758620689655172,
+    "held_out_should_block_accuracy_of_decided": 0.8888888888888888,
+    "held_out_should_block_uncertain_rate": 0.3793103448275862
   },
   "mlx-community/Qwen2.5-14B-Instruct-4bit": {
-    "temperature": 7.999999999999998,
+    "temperature": 12.513373778412308,
     "n_calibration_examples": 185,
-    "held_out_ece_raw": 0.3533071644409511,
-    "held_out_ece_calibrated": 0.13362547243466574,
+    "held_out_ece_raw": 0.35301104440450715,
+    "held_out_ece_calibrated": 0.07351796217700783,
     "held_out_accuracy": 0.6048387096774194,
     "held_out_block_accuracy_derived": 0.8166666666666667,
-    "held_out_block_accuracy_direct": 0.603448275862069
+    "held_out_block_accuracy_direct": 0.603448275862069,
+    "held_out_should_block_accuracy_of_decided": 0.9117647058823529,
+    "held_out_should_block_uncertain_rate": 0.41379310344827586
   }
 }

@@ -9,13 +9,14 @@ they run and would need human confirmation to proceed.
 Run: uv run python demo/agent_demo.py
 """
 
+import shutil
 import time
 from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
 
-from supervisor import Judge, RISK_SCALE, calibration_store
+from supervisor import Judge, RISK_SCALE
 from supervisor.audit_log import log_call
 from supervisor.paths import REPO_ROOT as ROOT
 from supervisor.questions import RISK_NAMES
@@ -42,7 +43,6 @@ def tool_read_file(path: str) -> str:
 
 
 def tool_delete_all(path: str) -> str:
-    import shutil
     target = SANDBOX / path
     if target.exists():
         shutil.rmtree(target)
@@ -59,10 +59,11 @@ def tool_send_email(to: str, subject: str) -> str:
 
 # -- a scripted "agent" turn queue: (tool_name, kwargs, state, agent's stated
 # reason). `reason` is never shown to the judge or fed into judge.ask() - it
-# only ever gets logged and (on a block) displayed to the human. The last
-# two entries give the agent a plausible-sounding justification on purpose,
-# to demonstrate that a fluent reason does NOT change the risk score - it's
-# still purely a function of `state`. See audit_log.py / mcp_server.py.
+# only ever gets logged and (on a block) displayed to the human. The
+# transfer and delete entries give the agent a plausible-sounding
+# justification on purpose, to demonstrate that a fluent reason does NOT
+# change the risk score - it's still purely a function of `state`. See
+# audit_log.py / mcp_server.py.
 
 AGENT_QUEUE = [
     ("tool_write_file", {"path": "notes/meeting.txt", "content": "Q3 planning notes"},
@@ -97,8 +98,7 @@ TOOLS = {
 def main() -> None:
     SANDBOX.mkdir(exist_ok=True)
     console.print("[bold]Loading judge...[/bold]")
-    judge = Judge()
-    judge.temperature = calibration_store.load_temperature(judge.model_id)
+    judge = Judge.calibrated()
     console.print(f"Loaded {judge.model_id} in {judge.load_time_s:.2f}s (calibrated T={judge.temperature:.3f})\n")
 
     console.rule("[bold]Agent loop starting[/bold]")
@@ -106,11 +106,12 @@ def main() -> None:
         console.print(f"\n[dim]agent wants to call:[/dim] [bold]{state}[/bold]")
         console.print(f"[dim]agent's stated reason:[/dim] {reason!r}")
 
-        t0 = time.time()
+        t0 = time.perf_counter()
         result = judge.ask(state, RISK_SCALE)
-        gate_ms = (time.time() - t0) * 1000
+        gate_ms = (time.perf_counter() - t0) * 1000
 
-        risk_label = RISK_NAMES[result.answer].upper()
+        risk_name = RISK_NAMES[result.answer]
+        risk_label = risk_name.upper()
         color = {"A": "green", "B": "yellow", "C": "red"}[result.answer]
         console.print(
             f"  [bold {color}]risk: {risk_label}[/bold {color}] "
@@ -121,7 +122,7 @@ def main() -> None:
             tool="assess_risk",
             state=state,
             reason=reason,
-            result={"risk": risk_label, "confidence": result.confidence},
+            result={"risk": risk_name, "confidence": round(result.confidence, 4)},
         )
 
         if result.answer == "C":

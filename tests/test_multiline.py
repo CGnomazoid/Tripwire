@@ -1,5 +1,6 @@
 """Unit tests for the pure string-splitting logic in multiline.py (no model
-needed - assess_shell_command itself is covered against the real model in
+needed - assess_shell_command itself is covered against a stub backend in
+tests/test_judge_offline.py, and against the real model in
 tests/test_mcp_server.py, marked slow)."""
 
 from supervisor.multiline import split_commands

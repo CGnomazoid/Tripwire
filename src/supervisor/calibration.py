@@ -3,8 +3,8 @@
 Temperature scaling: a single scalar T > 0 applied to logits before softmax
 (softmax(logits / T)). T > 1 softens an overconfident model, T < 1 sharpens
 an underconfident one. It's fit by minimizing NLL over a held-out labeled
-set, using a 1-D scan since this is a convex, single-parameter problem (no
-need to pull in scipy for this).
+set, using a golden-section search since this is a single-parameter,
+unimodal problem (no need to pull in scipy for this).
 
 ECE: bin predictions by confidence, compare each bin's average confidence to
 its actual accuracy, take the bin-size-weighted average gap. Standard
@@ -14,12 +14,8 @@ Neural Networks").
 
 from __future__ import annotations
 
-import json
 import math
 from dataclasses import dataclass
-from pathlib import Path
-
-from supervisor.paths import CALIBRATION_PATH
 
 MIN_TEMPERATURE = 1e-6
 """Floor applied to any caller-supplied temperature: softmax(logits / T) is
@@ -43,39 +39,20 @@ def softmax(logits: list[float], temperature: float = 1.0) -> list[float]:
     return [e / total for e in exps]
 
 
-def load_temperature(path: Path = CALIBRATION_PATH) -> float:
-    """Read the fitted temperature written by scripts/run_eval.py, falling
-    back to 1.0 (uncalibrated) when it's missing or unusable.
+def _nll(logits: list[float], correct_index: int, temperature: float) -> float:
+    """Negative log-likelihood of the correct candidate under
+    softmax(logits / T), for one example.
 
-    Falling back rather than raising is deliberate: a fresh clone has no
-    calibration.json until the eval has been run, and an uncalibrated judge
-    still answers correctly - only its reported confidence is less honest.
-    Refusing to start would be a worse failure than saying so and going.
-    """
-    try:
-        temperature = float(json.loads(path.read_text())["temperature"])
-    except (OSError, ValueError, KeyError, TypeError):
-        return 1.0
-    if not math.isfinite(temperature) or temperature <= 0:
-        return 1.0
-    return temperature
-
-
-def _nll(logit_true: float, logit_other: list[float], temperature: float) -> float:
-    """Negative log-likelihood of the true class under softmax(logits / T),
-    for one example, given the true class's logit and the other candidates'
-    logits (binary or multi-way).
-
-    Computed in log space rather than as -log(softmax(...)[0]) on purpose:
-    at the logit gaps the real model produces, dividing by a small T
-    underflows the true class's probability to exactly 0.0 and -log(0) is a
-    domain error. Subtracting the log-sum-exp keeps it finite.
+    Computed in log space (log-sum-exp minus the correct logit) rather than
+    as -log(softmax(...)[i]) on purpose: at the logit gaps the real model
+    produces, dividing by a small T underflows the correct candidate's
+    probability to exactly 0.0 and -log(0) is a domain error.
     """
     t = max(temperature, MIN_TEMPERATURE)
-    scaled_all = [l / t for l in ([logit_true] + logit_other)]
-    m = max(scaled_all)
-    denom = sum(math.exp(x - m) for x in scaled_all)
-    return -((scaled_all[0] - m) - math.log(denom))
+    scaled = [x / t for x in logits]
+    m = max(scaled)
+    log_sum_exp = m + math.log(sum(math.exp(x - m) for x in scaled))
+    return log_sum_exp - scaled[correct_index]
 
 
 @dataclass
@@ -89,31 +66,52 @@ class CalibrationExample:
 
 
 def fit_temperature(
-    examples: list[CalibrationExample], t_min: float = 0.05, t_max: float = 8.0, steps: int = 400
+    examples: list[CalibrationExample], t_min: float = 0.05, t_max: float = 100.0, tolerance: float = 1e-4
 ) -> float:
-    """Grid-search the scalar temperature minimizing mean NLL over
-    `examples`. Grid search over a convex 1-D objective is simple, doesn't
-    need a gradient, and is plenty precise for `steps` in the hundreds."""
+    """The temperature in [t_min, t_max] minimizing mean NLL over `examples`,
+    to within a relative `tolerance`.
+
+    Mean NLL is convex in 1/T (a sum of log-sum-exps of linear functions,
+    minus a linear term), so it has a single minimum along log T and a
+    golden-section search there converges on it exactly - about 90
+    evaluations for the default range and tolerance.
+
+    This used to be a 400-point grid over [0.05, 8.0], which had two
+    problems. The ceiling was too low: Qwen2.5-14B's stored fit was
+    7.999999999999998, the edge of the grid rather than a minimum. And the
+    grid's spacing leaked into reported numbers: the objective is flat near
+    its minimum (for the 7B model, mean NLL at T=6.047 and T=6.100 differs
+    in the sixth decimal) while held-out ECE is not, since a small shift in
+    T moves predictions across ECE's bin edges - so where the grid happened
+    to have a point decided a headline metric.
+    """
     if not examples:
         return 1.0
     if not 0 < t_min <= t_max:
         raise ValueError(f"need 0 < t_min <= t_max, got {t_min} and {t_max}")
-    if steps < 2:
-        raise ValueError(f"need at least 2 grid steps, got {steps}")
+    if tolerance <= 0:
+        raise ValueError(f"need a positive tolerance, got {tolerance}")
 
-    best_t, best_nll = 1.0, math.inf
-    log_min, log_max = math.log(t_min), math.log(t_max)
-    for i in range(steps):
-        t = math.exp(log_min + (log_max - log_min) * i / (steps - 1))
-        total = 0.0
-        for ex in examples:
-            true_logit = ex.logits[ex.correct_index]
-            other_logits = [l for j, l in enumerate(ex.logits) if j != ex.correct_index]
-            total += _nll(true_logit, other_logits, t)
-        mean_nll = total / len(examples)
-        if mean_nll < best_nll:
-            best_nll, best_t = mean_nll, t
-    return best_t
+    def mean_nll(log_t: float) -> float:
+        t = math.exp(log_t)
+        return sum(_nll(ex.logits, ex.correct_index, t) for ex in examples) / len(examples)
+
+    inv_phi = (math.sqrt(5) - 1) / 2
+    lo, hi = math.log(t_min), math.log(t_max)
+    a, b = hi - inv_phi * (hi - lo), lo + inv_phi * (hi - lo)
+    f_a, f_b = mean_nll(a), mean_nll(b)
+    while hi - lo > tolerance:
+        # keep the side holding the lower of the two interior points; one of
+        # them carries over as an interior point of the narrower bracket
+        if f_a < f_b:
+            hi, b, f_b = b, a, f_a
+            a = hi - inv_phi * (hi - lo)
+            f_a = mean_nll(a)
+        else:
+            lo, a, f_a = a, b, f_b
+            b = lo + inv_phi * (hi - lo)
+            f_b = mean_nll(b)
+    return math.exp((lo + hi) / 2)
 
 
 @dataclass
